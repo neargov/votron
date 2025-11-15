@@ -10,20 +10,17 @@ import {
 } from "./agentQueue";
 
 try {
-  dotenv.config({ path: ".env.development.local" });
+  dotenv.config({ path: ".env" });
 } catch (e) {
   console.log("No local env file found, using system environment");
 }
 
-console.log("🔍 Environment check:");
-console.log("NODE_ENV:", process.env.NODE_ENV);
-console.log("ANTHROPIC_API_KEY exists:", !!process.env.ANTHROPIC_API_KEY);
-console.log("AGENT_ACCOUNT_ID:", process.env.AGENT_ACCOUNT_ID);
-
 // Import services
-import { ProposalScreener } from "./proposalScreener";
-import createScreenerRoutes from "./routes/screener";
+import { Voter, VoteOption, VoteDecision } from "./voter";
+import createAgentRoutes from "./routes/vote";
 import createDebugRoutes from "./routes/debug";
+import type { ProposalData } from "./voting-utils";
+import { fetchProposalInfo } from "./voting-utils";
 
 import { agent, agentAccountId } from "@neardefi/shade-agent-js";
 
@@ -32,17 +29,16 @@ const VOTING_CONTRACT_ID =
   process.env.VOTING_CONTRACT_ID || "shade.ballotbox.testnet";
 const NEAR_RPC_JSON =
   process.env.NEAR_RPC_JSON || "https://rpc.testnet.near.org";
+const VENEAR_CONTRACT_ID = process.env.VENEAR_CONTRACT_ID || "v.hos03.testnet";
 
-// Initialize screener
-const proposalScreener = new ProposalScreener({
-  trustedProposers: [],
-  blockedProposers: [],
-  apiKey: process.env.ANTHROPIC_API_KEY,
+// Initialize voter
+const voter = new Voter({
+  apiKey: process.env.NEAR_AI_CLOUD_API_KEY,
   agentAccountId: process.env.AGENT_ACCOUNT_ID,
   votingContractId: process.env.VOTING_CONTRACT_ID,
 });
 
-// TESTING
+// Testing
 const debugInfo = {
   lastWebSocketMessage: null as string | null,
   lastEventTime: null as string | null,
@@ -61,21 +57,21 @@ app.use(cors());
 
 // Health check
 app.get("/", (c) => {
-  const stats = proposalScreener.getScreeningStats();
-  const execStats = proposalScreener.getExecutionStats();
+  const stats = voter.getVoteStats();
+  const execStats = voter.getExecutionStats();
 
   return c.json({
     message: "App is running",
     shadeAgent: "active",
-    proposalScreener: "active",
+    voterAgent: "active",
     timestamp: new Date().toISOString(),
     uptime: Math.floor(process.uptime()),
     eventStream: eventClient ? "connected" : "disconnected",
-    screener: {
+    voter: {
       status: "active",
-      totalScreened: stats.total,
+      totalVotes: stats.total,
       breakdown: stats.breakdown,
-      lastScreened: stats.lastScreened,
+      lastDecision: stats.lastDecision,
     },
     execution: {
       totalExecutions: execStats.total,
@@ -85,24 +81,57 @@ app.get("/", (c) => {
   });
 });
 
-app.get("/api/test", (c) => {
-  console.log("🧪 Test API route hit!");
-  return c.json({
-    message: "API routing works!",
-    timestamp: new Date().toISOString(),
-    screenerTest: {
-      hasScreener: !!proposalScreener,
-      hasGetStats: typeof proposalScreener.getScreeningStats === "function",
-      hasAgentAccount: !!proposalScreener.agentAccountId,
-    },
-  });
+// POST /api/evaluate - AI evaluation only (no vote cast)
+app.post("/api/evaluate", async (c) => {
+  try {
+    const body = await c.req.json();
+
+    if (!body.proposalId) {
+      return c.json({ error: "proposalId is required" }, 400);
+    }
+
+    console.log(`🔍 AI evaluation only for proposal ${body.proposalId}...`);
+
+    // Fetch from chain
+    const canonicalProposal = await fetchProposalInfo(
+      body.proposalId,
+      VOTING_CONTRACT_ID,
+      NEAR_RPC_JSON
+    );
+
+    if (!canonicalProposal) {
+      return c.json(
+        { error: "Proposal not found on chain", proposalId: body.proposalId },
+        404
+      );
+    }
+
+    // AI Evaluation only
+    const decision = await voter.evaluateProposal(
+      body.proposalId,
+      canonicalProposal
+    );
+
+    return c.json({
+      proposalId: body.proposalId,
+      recommendation: decision.selectedOption,
+      reasons: decision.reasons,
+      timestamp: decision.timestamp,
+      verifiedFromChain: true,
+      proposalTitle: canonicalProposal.title,
+      proposalStatus: canonicalProposal.status,
+      voteCast: false,
+    });
+  } catch (error: any) {
+    console.error("❌ AI evaluation failed:", error);
+    return c.json({ error: "Evaluation failed", details: error.message }, 500);
+  }
 });
-console.log("✅ Test route ready");
 
 // Mount routes
 app.route(
-  "/api/screener",
-  createScreenerRoutes(proposalScreener, {
+  "/api/vote",
+  createAgentRoutes(voter, {
     get eventClient() {
       return eventClient;
     },
@@ -114,22 +143,10 @@ app.route(
     },
     maxReconnectAttempts,
     VOTING_CONTRACT_ID,
+    NEAR_RPC_JSON,
   })
 );
 
-app.route(
-  "/api/debug",
-  createDebugRoutes(
-    {
-      eventClient,
-      isConnecting,
-      reconnectAttempts,
-      maxReconnectAttempts,
-      VOTING_CONTRACT_ID,
-    },
-    debugInfo
-  )
-);
 app.route(
   "/debug",
   createDebugRoutes(
@@ -253,53 +270,50 @@ app.get("/api/queue-status", (c) => {
   });
 });
 
-// Manual approval endpoint
-app.post("/api/agent-approve", async (c) => {
+app.post("/api/manual-vote", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
-    const { proposalId, force } = body;
+    const { proposalId, vote } = body;
 
     if (!proposalId) {
       return c.json({ error: "proposalId required" }, 400);
     }
 
-    const screeningResult = proposalScreener.getScreeningResult(proposalId);
-    if (!screeningResult) {
-      return c.json({ error: "Proposal not found or not screened" }, 404);
-    }
-
-    if (proposalScreener.isProposalExecuted(proposalId)) {
+    const voteChoice = parseInt(vote);
+    if (![0, 1, 2].includes(voteChoice)) {
       return c.json(
         {
-          error: "Proposal already executed",
-          executionResult: proposalScreener.getExecutionStatus(proposalId),
+          error: "Invalid vote. Use 0=For, 1=Against, 2=Abstain",
         },
         400
       );
     }
 
-    if (!screeningResult.approved && !force) {
-      return c.json(
-        {
-          error: "Proposal was rejected by AI. Use force=true to override.",
-          screeningResult,
-        },
-        400
-      );
-    }
+    const finalVote: VoteOption =
+      voteChoice === 0 ? "For" : voteChoice === 1 ? "Against" : "Abstain";
 
-    const result = await proposalScreener.approveProposal(proposalId);
+    const canonicalProposal = await fetchProposalInfo(
+      proposalId,
+      VOTING_CONTRACT_ID,
+      NEAR_RPC_JSON
+    );
+
+    const manualResult = await voter.recordManualVote(
+      proposalId,
+      finalVote,
+      `Raw manual vote: ${finalVote}`,
+      canonicalProposal
+    );
 
     return c.json({
       success: true,
       proposalId,
-      forced: !!force,
-      method: "agent_contract",
-      result,
-      message: `Proposal ${proposalId} approved via agent contract`,
+      vote: finalVote,
+      method: "manual-vote",
+      transactionHash: manualResult.executionResult?.transactionHash,
     });
   } catch (error: any) {
-    console.error("❌ Manual agent approval failed:", error);
+    console.error("❌ Manual vote failed:", error);
     return c.json({ error: error.message }, 500);
   }
 });
@@ -360,148 +374,86 @@ function createShadeAgentApiRoutes() {
   return agentApiRoutes;
 }
 
-// WebSocket monitoring functions
-interface ProposalData {
-  title?: string;
-  description?: string;
-  link?: string;
-  proposer_id?: string;
-  deadline?: string;
-  voting_end?: string;
-  snapshot_block?: string;
-  total_voting_power?: string;
-}
-
-async function fetchProposal(
-  proposalId: string | number
-): Promise<ProposalData> {
-  const id = parseInt(proposalId.toString());
-  console.log(`🔍 Fetching proposal ID: ${id}`);
-
-  const payload = {
-    jsonrpc: "2.0",
-    id: "1",
-    method: "query",
-    params: {
-      request_type: "call_function",
-      finality: "final",
-      account_id: VOTING_CONTRACT_ID,
-      method_name: "get_proposal",
-      args_base64: Buffer.from(JSON.stringify({ proposal_id: id })).toString(
-        "base64"
-      ),
-    },
-  };
-
-  const res = await fetch(NEAR_RPC_JSON, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    throw new Error(`RPC request failed: ${res.status}`);
-  }
-
-  const json = await res.json();
-
-  if (json.error) {
-    throw new Error(`RPC error: ${json.error.message}`);
-  }
-
-  if (!json.result || !json.result.result || json.result.result.length === 0) {
-    throw new Error(`Proposal ${proposalId} does not exist`);
-  }
-
-  const bytes = json.result.result;
-  const raw = Buffer.from(bytes).toString("utf-8");
-  return JSON.parse(raw);
-}
-
-async function handleNewProposal(proposalId: string, eventDetails: any) {
-  try {
-    console.log(`📝 Processing new proposal ${proposalId} with screener`);
-
-    let proposal: ProposalData | null = null;
-    let title = eventDetails.title || `Proposal #${proposalId}`;
-    let description = eventDetails.description || "";
-    let proposer_id = eventDetails.proposer_id;
-
-    // Fetch full proposal details if needed
-    if (!eventDetails.title || !eventDetails.description) {
-      try {
-        proposal = await fetchProposal(proposalId);
-        title =
-          eventDetails.title || proposal.title || `Proposal #${proposalId}`;
-        description = eventDetails.description || proposal.description || "";
-        proposer_id = eventDetails.proposer_id || proposal.proposer_id;
-      } catch (error: any) {
-        console.warn(
-          `⚠️ Could not fetch full proposal details for ${proposalId}:`,
-          error.message
-        );
-      }
-    }
-
-    // Screen the proposal
-    const screeningResult = await proposalScreener.screenProposal(proposalId, {
-      title,
-      description,
-      proposer_id,
-      ...proposal,
-    });
-
-    console.log(`\n📋 NEW PROPOSAL DETECTED:`);
-    console.log(`📝 Title: ${title}`);
-    console.log(`👤 Proposer: ${proposer_id || "Unknown"}`);
-    console.log(
-      `📄 Description: ${description.substring(0, 150)}${
-        description.length > 150 ? "..." : ""
-      }`
-    );
-    console.log(
-      `🤖 AI Decision: ${screeningResult.approved ? "APPROVED" : "REJECTED"}`
-    );
-    console.log(`📋 Reasons: ${screeningResult.reasons.join(" | ")}`);
-
-    if (screeningResult.executionResult) {
-      console.log(
-        `🚀 Execution: ${screeningResult.executionResult.action.toUpperCase()}`
-      );
-      if (screeningResult.executionResult.transactionHash) {
-        console.log(
-          `🔗 Transaction: ${screeningResult.executionResult.transactionHash}`
-        );
-      }
-    }
-  } catch (error: any) {
-    console.error(
-      `❌ Failed to process new proposal ${proposalId}:`,
-      error.message
-    );
-  }
-}
-
-async function handleProposalApproval(proposalId: string, eventDetails: any) {
+async function handleVote(proposalId: string, eventDetails: any) {
   try {
     console.log(`✅ Processing approval for proposal ${proposalId}`);
+    if (eventDetails.reviewer_id) {
+      console.log(`👤 Reviewer: ${eventDetails.reviewer_id}`);
+    }
+    if (eventDetails.voting_start_time_ns) {
+      console.log(`🕒 Voting start (ns): ${eventDetails.voting_start_time_ns}`);
+    }
 
-    const existingResult = proposalScreener.getScreeningResult(proposalId);
-    if (existingResult) {
-      console.log(`\n🗳️ PROPOSAL ${proposalId} APPROVED FOR VOTING:`);
-      console.log(
-        `📋 Our screening: ${existingResult.approved ? "APPROVED" : "REJECTED"}`
+    let fullProposal: ProposalData | null = null;
+    try {
+      fullProposal = await fetchProposalInfo(
+        proposalId,
+        VOTING_CONTRACT_ID,
+        NEAR_RPC_JSON
       );
-      console.log(`📋 Reasons: ${existingResult.reasons.join(" | ")}`);
+      console.log(
+        `📋 Loaded proposal info: ${fullProposal.title || "Untitled proposal"}`
+      );
+      if (fullProposal.status) {
+        console.log(`📊 Current status: ${fullProposal.status}`);
+      }
+      if (
+        fullProposal.voting_start_time_ns &&
+        !eventDetails.voting_start_time_ns
+      ) {
+        console.log(
+          `🕒 Voting start (contract): ${fullProposal.voting_start_time_ns}`
+        );
+      }
+    } catch (error: any) {
+      console.warn(
+        `⚠️ Could not fetch proposal ${proposalId} info:`,
+        error.message
+      );
+    }
+
+    if (!fullProposal) {
+      console.warn(
+        `⚠️ Skipping vote for proposal ${proposalId}: unable to load canonical data`
+      );
+      return;
+    }
+
+    let evaluation = voter.getVoteDecision(proposalId);
+    if (!evaluation && fullProposal) {
+      console.log(`🤖 Running AI evaluation for proposal ${proposalId}`);
+      evaluation = await voter.evaluateProposal(proposalId, fullProposal);
+    }
+
+    if (evaluation) {
+      console.log(`\n🗳️ PROPOSAL ${proposalId} APPROVED FOR VOTING:`);
+      console.log(`📋 Our decision: ${evaluation.selectedOption || "Unknown"}`);
+      console.log(`📋 Reasons: ${evaluation.reasons.join(" | ")}`);
     } else {
       console.log(
-        `⚠️ Proposal ${proposalId} was approved but we haven't screened it`
+        `⚠️ Proposal ${proposalId} was approved but we haven't evaluated it`
+      );
+    }
+
+    if (evaluation?.executionResult?.transactionHash) {
+      console.log(
+        `🔗 Vote already cast on-chain: ${evaluation.executionResult.transactionHash}`
+      );
+  } else if (evaluation?.selectedOption && fullProposal) {
+    console.log(
+      `ℹ️ Vote decision: ${evaluation.selectedOption} for proposal ${proposalId}`
+    );
+  } else {
+    console.log(
+      `ℹ️ Skipping vote for proposal ${proposalId}: ${
+        evaluation ? "no recorded voting choice" : "no evaluation result"
+      }`
       );
     }
   } catch (error: any) {
     console.error(
       `❌ Failed to process approval ${proposalId}:`,
-      error.message
+      error
     );
   }
 }
@@ -524,11 +476,14 @@ function extractProposalDetails(event: any) {
   const eventData = event.event_data?.[0] || {};
   return {
     proposalId: eventData.proposal_id,
+    proposal_id: eventData.proposal_id,
     title: eventData.title,
     description: eventData.description,
     link: eventData.link,
     proposer_id: eventData.proposer_id,
     voting_options: eventData.voting_options,
+    reviewer_id: eventData.reviewer_id,
+    voting_start_time_ns: eventData.voting_start_time_ns,
   };
 }
 
@@ -562,8 +517,18 @@ async function startEventStream() {
 
       const contractFilter = {
         And: [
-          { path: "event_standard", operator: { Equals: "venear" } },
-          { path: "account_id", operator: { Equals: VOTING_CONTRACT_ID } },
+          {
+            path: "action.FunctionCall.receiver_id",
+            operator: { Equals: VOTING_CONTRACT_ID },
+          },
+          {
+            path: "event_event",
+            operator: { Equals: "approve_proposal" },
+          },
+          {
+            path: "action.FunctionCall.method_name",
+            operator: { Equals: "approve_proposal" },
+          },
         ],
       };
 
@@ -610,13 +575,11 @@ async function startEventStream() {
           console.log(`🎯 PROCESSING ${eventType} for proposal ${proposalId}`);
           const eventDetails = extractProposalDetails(event);
 
-          if (eventType === "create_proposal" || eventType.includes("create")) {
-            await handleNewProposal(proposalId, eventDetails);
-          } else if (
+          if (
             eventType === "approve_proposal" ||
             eventType.includes("approve")
           ) {
-            await handleProposalApproval(proposalId, eventDetails);
+            await handleVote(proposalId, eventDetails);
           } else {
             console.log(`⏩ Unhandled event type: ${eventType}`);
           }

@@ -25,8 +25,8 @@ export function ProposalCard({ proposal, agentExecution }) {
       return <span className="badge bg-dark">NOT PROCESSED</span>;
     }
 
-    // Handle AI screening data
-    if (execution.type === "ai_screening") {
+    // Handle AI evaluation data
+    if (execution.type === "ai_evaluation") {
       return execution.approved ? (
         <span className="badge bg-success">APPROVED</span>
       ) : (
@@ -34,7 +34,7 @@ export function ProposalCard({ proposal, agentExecution }) {
       );
     }
 
-    // Handle execution data
+    // Handle agent execution data
     if (execution.executed === false) {
       return <span className="badge bg-danger">FAILED</span>;
     }

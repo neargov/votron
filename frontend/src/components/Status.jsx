@@ -352,7 +352,7 @@ export function Status() {
       try {
         if (proposalId) {
           const proposalResponse = await fetch(
-            `${Constants.API_URL}/api/screener/status/${proposalId}`
+            `${Constants.API_URL}/api/vote/status/${proposalId}`
           );
 
           console.log(`📡 Response status: ${proposalResponse.status}`);

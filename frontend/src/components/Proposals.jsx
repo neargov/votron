@@ -12,7 +12,7 @@ export function Proposals({
 }) {
   const [statusFilter, setStatusFilter] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
-  const [screeningData, setScreeningData] = useState({});
+  const [evaluationData, setScreeningData] = useState({});
 
   // Get current proposals from voting contract
   const { proposals, loading, error, refetch } = useProposals(
@@ -26,7 +26,7 @@ export function Proposals({
       const screeningPromises = proposals.map(async (proposal) => {
         try {
           const response = await fetch(
-            `${Constants.API_URL}/api/screener/status/${proposal.id}`
+            `${Constants.API_URL}/api/vote/status/${proposal.id}`
           );
           if (response.ok) {
             const data = await response.json();
@@ -67,7 +67,7 @@ export function Proposals({
     });
 
     // Add AI screening data
-    Object.entries(screeningData).forEach(([proposalId, aiData]) => {
+    Object.entries(evaluationData).forEach(([proposalId, aiData]) => {
       if (!lookup[proposalId] && aiData.screened) {
         lookup[proposalId] = {
           proposalId,
@@ -75,13 +75,13 @@ export function Proposals({
           reasons: aiData.reasons,
           timestamp: aiData.timestamp,
           success: aiData.approved,
-          type: "ai_screening",
+          type: "ai_evaluation",
         };
       }
     });
 
     return lookup;
-  }, [executionHistory, screeningData]);
+  }, [executionHistory, evaluationData]);
 
   // Filter proposals by status
   const filteredProposals = useMemo(() => {

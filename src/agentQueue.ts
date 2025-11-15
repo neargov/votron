@@ -123,6 +123,9 @@ export const queuedAgentAccountId = (): Promise<{ accountId: string }> => {
 export const queuedAgentCall = (args: {
   methodName: string;
   args: any;
+  contractId?: string;
+  gas?: string | number;
+  deposit?: string | number;
 }): Promise<any> => {
   return agentQueue.enqueue(() => agentCall(args));
 };

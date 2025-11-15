@@ -43,15 +43,21 @@ export default function createDebugRoutes(
   });
 
   debugRoutes.get("/env", (c) => {
+    const isDev = process.env.NODE_ENV === "development";
+
     return c.json({
       nodeEnv: process.env.NODE_ENV,
-      hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
-      anthropicKeyLength: process.env.ANTHROPIC_API_KEY?.length || 0,
+      hasNearAiKey: !!process.env.NEAR_AI_CLOUD_API_KEY,
       agentAccountId: process.env.AGENT_ACCOUNT_ID,
-      allAnthropicKeys: Object.keys(process.env).filter((k) =>
-        k.toLowerCase().includes("anthropic")
-      ),
-      envKeysCount: Object.keys(process.env).length,
+      votingContract: process.env.VOTING_CONTRACT_ID,
+      venearContract: process.env.VENEAR_CONTRACT_ID,
+      ...(isDev && {
+        nearAiKeyLength: process.env.NEAR_AI_CLOUD_API_KEY?.length || 0,
+        allNearAiKeys: Object.keys(process.env).filter((k) =>
+          k.toLowerCase().includes("near_ai")
+        ),
+        envKeysCount: Object.keys(process.env).length,
+      }),
     });
   });
 

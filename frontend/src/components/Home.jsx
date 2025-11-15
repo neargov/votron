@@ -54,7 +54,7 @@ export function Home({ accountId }) {
 
   const fetchStats = async () => {
     try {
-      const response = await fetch(`${Constants.API_URL}/api/screener/stats`);
+      const response = await fetch(`${Constants.API_URL}/api/vote/stats`);
       if (response.ok) {
         const data = await response.json();
         setStats(data);
@@ -66,7 +66,7 @@ export function Home({ accountId }) {
 
   const fetchExecutionHistory = async () => {
     try {
-      const response = await fetch(`${Constants.API_URL}/api/screener/history`);
+      const response = await fetch(`${Constants.API_URL}/api/vote/history`);
       if (response.ok) {
         const data = await response.json();
         setExecutionHistory(data.history || []);
@@ -160,10 +160,10 @@ This initiative will significantly expand NEAR's developer community, reduce onb
     setTestResult(null);
 
     try {
-      console.log("🤖 Testing AI screening...");
+      console.log("🤖 Testing AI voting...");
 
       const response = await fetch(
-        `${Constants.API_URL}/api/screener/test-ai-screening`,
+        `${Constants.API_URL}/api/vote/test-ai-voting`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -236,7 +236,7 @@ This initiative will significantly expand NEAR's developer community, reduce onb
       console.log("🧹 Clearing backend execution history first...");
       try {
         const clearResponse = await fetch(
-          `${Constants.API_URL}/api/screener/history`,
+          `${Constants.API_URL}/api/vote/history`,
           { method: "DELETE" }
         );
         if (clearResponse.ok) {
@@ -280,7 +280,7 @@ This initiative will significantly expand NEAR's developer community, reduce onb
       console.log(`🚀 Executing proposal #${proposalId}...`);
 
       const executionResponse = await fetch(
-        `${Constants.API_URL}/api/screener/execute/${proposalId}`,
+        `${Constants.API_URL}/api/vote/execute/${proposalId}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -448,7 +448,7 @@ This suggests a deeper issue with the agent contract or cross-contract call.`;
             </h6>
 
             {testResult.success &&
-              testResult.testType === "ai_screening_only" && (
+              testResult.testType === "ai_evaluation_only" && (
                 <div>
                   <p>
                     <strong>AI Decision:</strong>

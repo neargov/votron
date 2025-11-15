@@ -40,7 +40,7 @@ export function Settings() {
 
   const fetchAutoApprovalStats = async () => {
     try {
-      const response = await fetch(`${Constants.API_URL}/api/screener/stats`);
+      const response = await fetch(`${Constants.API_URL}/api/vote/stats`);
       if (response.ok) {
         const data = await response.json();
         setAutoApprovalStats(data);
@@ -52,7 +52,7 @@ export function Settings() {
 
   const fetchExecutionHistory = async () => {
     try {
-      const response = await fetch(`${Constants.API_URL}/api/screener/history`);
+      const response = await fetch(`${Constants.API_URL}/api/vote/history`);
       if (response.ok) {
         const data = await response.json();
         setExecutionHistory(data);
@@ -152,7 +152,7 @@ export function Settings() {
       // Test 4: Auto-Approval System
       try {
         const statsResponse = await fetch(
-          `${Constants.API_URL}/api/screener/stats`
+          `${Constants.API_URL}/api/vote/stats`
         );
         const statsData = await statsResponse.json();
         results.tests.push({
@@ -215,9 +215,9 @@ export function Settings() {
         const envData = await envResponse.json();
         results.tests.push({
           name: "Environment Check",
-          status: envData.hasAnthropicKey ? "success" : "warning",
-          message: `Anthropic API: ${
-            envData.hasAnthropicKey ? "Configured" : "Missing"
+          status: envData.hasNearAiKey ? "success" : "warning",
+          message: `NEAR AI Cloud API: ${
+            envData.hasNearAiKey ? "Configured" : "Missing"
           }, Agent: ${envData.agentAccountId || "Missing"}`,
         });
       } catch (error) {
@@ -641,10 +641,7 @@ export function Settings() {
               <button
                 className="btn btn-outline-success"
                 onClick={() =>
-                  window.open(
-                    `${Constants.API_URL}/api/screener/history`,
-                    "_blank"
-                  )
+                  window.open(`${Constants.API_URL}/api/vote/history`, "_blank")
                 }
               >
                 📊 Execution History
@@ -662,10 +659,7 @@ export function Settings() {
               <button
                 className="btn btn-outline-secondary"
                 onClick={() =>
-                  window.open(
-                    `${Constants.API_URL}/api/screener/stats`,
-                    "_blank"
-                  )
+                  window.open(`${Constants.API_URL}/api/vote/stats`, "_blank")
                 }
               >
                 📈 Live Stats

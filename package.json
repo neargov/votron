@@ -11,7 +11,7 @@
     "docker:build:no-cache": "sudo docker build --no-cache --platform linux/amd64 -t pivortex/my-app:latest .",
     "docker:push": "sudo docker push pivortex/my-app",
     "docker:prune": "sudo docker system prune",
-    "phala:deploy": "phala cvms create --name my-app --vcpu 1 --compose ./docker-compose.yaml --env-file ./.env.development.local"
+    "phala:deploy": "phala cvms create --name my-app --vcpu 1 --compose ./docker-compose.yaml --env-file ./.env"
   },
   "dependencies": {
     "@fastnear/api": "^0.9.7",
