@@ -151,9 +151,15 @@ app.route(
   "/debug",
   createDebugRoutes(
     {
-      eventClient,
-      isConnecting,
-      reconnectAttempts,
+      get eventClient() {
+        return eventClient;
+      },
+      get isConnecting() {
+        return isConnecting;
+      },
+      get reconnectAttempts() {
+        return reconnectAttempts;
+      },
       maxReconnectAttempts,
       VOTING_CONTRACT_ID,
     },
@@ -327,6 +333,7 @@ function createShadeAgentApiRoutes() {
       const result = await agentAccountId();
       return c.json(result);
     } catch (error: any) {
+      console.error("❌ Shade agent API error:", error);
       return c.json({ error: error.message }, 500);
     }
   });
@@ -336,6 +343,7 @@ function createShadeAgentApiRoutes() {
       const result = await agent("getBalance");
       return c.json(result);
     } catch (error: any) {
+      console.error("❌ Shade agent API error:", error);
       return c.json({ error: error.message }, 500);
     }
   });
@@ -346,6 +354,7 @@ function createShadeAgentApiRoutes() {
       const result = await agent("call", body);
       return c.json(result);
     } catch (error: any) {
+      console.error("❌ Shade agent API error:", error);
       return c.json({ error: error.message }, 500);
     }
   });
@@ -356,6 +365,7 @@ function createShadeAgentApiRoutes() {
       const result = await agent("view", body);
       return c.json(result);
     } catch (error: any) {
+      console.error("❌ Shade agent API error:", error);
       return c.json({ error: error.message }, 500);
     }
   });
@@ -367,6 +377,7 @@ function createShadeAgentApiRoutes() {
       const result = await agent(method, body);
       return c.json(result);
     } catch (error: any) {
+      console.error("❌ Shade agent API error:", error);
       return c.json({ error: error.message }, 500);
     }
   });

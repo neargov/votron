@@ -7,9 +7,9 @@ interface DebugInfo {
 }
 
 interface WebSocketState {
-  eventClient: any;
-  isConnecting: boolean;
-  reconnectAttempts: number;
+  get eventClient(): any;
+  get isConnecting(): boolean;
+  get reconnectAttempts(): number;
   maxReconnectAttempts: number;
   VOTING_CONTRACT_ID: string;
 }
