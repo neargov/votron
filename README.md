@@ -89,7 +89,7 @@ NEAR_SEED_PHRASE="your seed phrase"
 NEXT_PUBLIC_contractId=ac-proxy.example.testnet
 VOTING_CONTRACT_ID=vote.ballotbox.testnet
 VENEAR_CONTRACT_ID=v.hos03.testnet
-NEAR_RPC_JSON=https://rpc.testnet.near.org
+NEAR_RPC_JSON=https://rpc.testnet.fastnear.com
 ```
 
 ### **Start Docker:**

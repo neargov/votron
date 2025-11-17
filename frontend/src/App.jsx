@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import "../styles/globals.css";
 import Home from "./components/Home.jsx";
-import Settings from "./components/Settings.jsx";
 import { Constants } from "./hooks/constants.js";
 import { useAccount } from "./hooks/useAccount.js";
 
@@ -16,8 +15,6 @@ export default function App() {
     switch (activeTab) {
       case "home":
         return <Home accountId={accountId} />;
-      case "config":
-        return <Settings />;
       default:
         return <Home accountId={accountId} />;
     }

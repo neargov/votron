@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { near } from "../hooks/fastnear.js";
 import { Connect } from "./Connect.jsx";
 import { Proposals } from "./Proposals.jsx";
@@ -7,11 +7,11 @@ import { Constants } from "../hooks/constants.js";
 
 export function Home({ accountId }) {
   const [agentStatus, setAgentStatus] = useState(null);
-  const [executionHistory, setExecutionHistory] = useState([]);
   const [stats, setStats] = useState(null);
   const [isDeciding, setIsDeciding] = useState(false);
-  const [isExecuting, setIsExecuting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [actionLoading, setActionLoading] = useState(null);
+  const hasFetchedRef = useRef(false);
 
   // Status
   const wsConnected = !!stats?.monitoring?.eventStreamConnected;
@@ -19,11 +19,9 @@ export function Home({ accountId }) {
 
   // Fetch agent data
   useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
     fetchAllAgentData();
-
-    // Refresh every 5 seconds
-    const interval = setInterval(fetchAllAgentData, 5000);
-    return () => clearInterval(interval);
   }, []);
 
   const fetchAllAgentData = async () => {
@@ -31,7 +29,6 @@ export function Home({ accountId }) {
       await Promise.all([
         fetchAgentStatus(),
         fetchStats(),
-        fetchExecutionHistory(),
       ]);
     } catch (error) {
       console.error("Failed to fetch agent data:", error);
@@ -61,18 +58,6 @@ export function Home({ accountId }) {
       }
     } catch (error) {
       console.error("Failed to fetch stats:", error);
-    }
-  };
-
-  const fetchExecutionHistory = async () => {
-    try {
-      const response = await fetch(`${Constants.API_URL}/api/vote/history`);
-      if (response.ok) {
-        const data = await response.json();
-        setExecutionHistory(data.history || []);
-      }
-    } catch (error) {
-      console.error("Failed to fetch execution history:", error);
     }
   };
 
@@ -131,7 +116,7 @@ Create a comprehensive educational platform with video tutorials, hands-on works
 This initiative will significantly expand NEAR's developer community, reduce onboarding friction, and create a sustainable education resource for future ecosystem growth.
   `,
         link: "https://near-dev-education.org",
-        voting_options: ["Approve", "Reject"],
+        voting_options: ["For", "Against", "Abstain"],
       };
 
       await near.sendTx({
@@ -155,193 +140,157 @@ This initiative will significantly expand NEAR's developer community, reduce onb
     }
   };
 
-  const testScreening = async () => {
+  const createSampleProposal = async () => {
+    if (!accountId) {
+      alert("Please sign in to create a proposal.");
+      return;
+    }
+
+    setActionLoading("create");
+    try {
+      await near.sendTx({
+        receiverId: Constants.VOTING_CONTRACT_ID,
+        actions: [
+          near.actions.functionCall({
+            methodName: "create_proposal",
+            gas: $$`300 Tgas`,
+            deposit: $$`0.015 NEAR`,
+            args: {
+              metadata: {
+                title: "AI Governance Product Research",
+                description: "Experiment with autonomous delegate agents!",
+                link: "https://gov.near.org",
+                voting_options: ["For", "Against", "Abstain"],
+              },
+            },
+          }),
+        ],
+        waitUntil: "INCLUDED",
+      });
+      console.log("Sample proposal transaction submitted, awaiting wallet signature.");
+      fetchAllAgentData();
+    } catch (error) {
+      console.error("Failed to create sample proposal:", error);
+      alert(`Failed to create sample: ${error.message}`);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const approveProposal = async () => {
+    if (!accountId) {
+      alert("Please sign in to approve a proposal.");
+      return;
+    }
+    const proposalId = prompt("Enter proposal ID to approve (screening):", "");
+    if (!proposalId) return;
+
+    setActionLoading("approve");
+    try {
+      await near.sendTx({
+        receiverId: Constants.VOTING_CONTRACT_ID,
+        actions: [
+          near.actions.functionCall({
+            methodName: "approve_proposal",
+            gas: $$`300 Tgas`,
+            deposit: $$`1 yoctoNEAR`,
+            args: { proposal_id: Number(proposalId), voting_start_time_sec: null },
+          }),
+        ],
+        waitUntil: "INCLUDED",
+      });
+      console.log(`Proposal #${proposalId} approval transaction submitted.`);
+      fetchAllAgentData();
+    } catch (error) {
+      console.error("Failed to approve proposal:", error);
+      alert(`Approval failed: ${error.message}`);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const testEvaluation = async () => {
+    const proposalId = prompt("Enter a proposal ID to evaluate:", "");
+
+    if (!proposalId) {
+      return;
+    }
+
     setIsDeciding(true);
     setTestResult(null);
 
     try {
-      console.log("🤖 Testing AI voting...");
+      const response = await fetch(`${Constants.API_URL}/api/evaluate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proposalId }),
+      });
 
-      const response = await fetch(
-        `${Constants.API_URL}/api/vote/test-ai-voting`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            proposal: {
-              title: "Test NEAR DeFi Protocol Development",
-              description:
-                "Building a new automated market maker (AMM) protocol for the NEAR ecosystem. Budget: $10,000 for 3 months of development. Our team has previous DeFi experience with Uniswap and PancakeSwap. The protocol will feature low slippage, multi-token pools, and yield farming capabilities.",
-              proposer_id: "developer.testnet",
-            },
-          }),
-        }
-      );
-
-      const result = await response.json();
-      setTestResult(result);
-
-      console.log("🤖 AI Test Result:", result);
-
-      if (result.success) {
-        const decision = result.aiDecision.approved ? "APPROVED" : "REJECTED";
-        alert(
-          `✅ AI Test Complete!\n\nDecision: ${decision}\n\nReasons:\n${result.aiDecision.reasons.join(
-            "\n"
-          )}`
-        );
-      } else {
-        alert(`❌ AI Test Failed: ${result.error}`);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || "Evaluation request failed");
       }
+
+      const data = await response.json();
+      const reasonsText = Array.isArray(data.reasons)
+        ? data.reasons.join("\n")
+        : data.reasons || "No reasons provided.";
+
+      setTestResult({ success: true, ...data });
+
+      alert(
+        `✅ Evaluation Complete!\n\nProposal #${data.proposalId}${
+          data.proposalTitle ? `: ${data.proposalTitle}` : ""
+        }\nRecommendation: ${data.recommendation}\nVerified from chain: ${
+          data.verifiedFromChain ? "Yes" : "No"
+        }\n\nReasons:\n${reasonsText}`
+      );
     } catch (error) {
-      console.error("AI test failed:", error);
-      const errorResult = { success: false, error: error.message };
-      setTestResult(errorResult);
-      alert(`❌ Test Failed: ${error.message}`);
+      console.error("Evaluation test failed:", error);
+      setTestResult({ success: false, error: error.message });
+      alert(`❌ Evaluation Failed: ${error.message}`);
     } finally {
       setIsDeciding(false);
     }
   };
 
-  const testExecution = async () => {
-    setIsExecuting(true);
-    setTestResult(null);
+  const manualVote = async () => {
+    const proposalId = prompt("Enter proposal ID to vote on:", "");
+    if (!proposalId) return;
 
+    const voteOption = prompt(
+      'Enter vote option ("For", "Against", "Abstain"):',
+      "For"
+    );
+    if (!voteOption) return;
+
+    setActionLoading("manualVote");
     try {
-      // Get latest proposal ID dynamically
-      const proposalsResponse = await fetch(
-        `${Constants.API_URL}/api/proposals/shade.ballotbox.testnet`
-      );
-      const proposalsData = await proposalsResponse.json();
-
-      if (!proposalsData.proposals || proposalsData.proposals.length === 0) {
-        throw new Error("No proposals found");
+      const voteMap = { For: 0, Against: 1, Abstain: 2 };
+      const voteValue = voteMap[voteOption];
+      if (voteValue === undefined) {
+        throw new Error("Invalid vote option");
       }
 
-      // Get the latest proposal (highest ID)
-      const latestProposal = proposalsData.proposals.reduce((latest, current) =>
-        current.id > latest.id ? current : latest
-      );
+      const response = await fetch(`${Constants.API_URL}/api/manual-vote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proposalId, vote: voteValue }),
+      });
 
-      const proposalId = latestProposal.id.toString();
-      const proposalTitle = latestProposal.title;
-
-      console.log(
-        `🚀 Testing execution with latest proposal #${proposalId}: "${proposalTitle}"`
-      );
-
-      console.log(`🎯 Using proposal #${proposalId}: "${proposalTitle}"`);
-
-      // Step 1: Clear backend execution history to reset "already executed" status
-      console.log("🧹 Clearing backend execution history first...");
-      try {
-        const clearResponse = await fetch(
-          `${Constants.API_URL}/api/vote/history`,
-          { method: "DELETE" }
-        );
-        if (clearResponse.ok) {
-          console.log("✅ Backend history cleared successfully");
-        } else {
-          console.log(
-            "⚠️ Could not clear backend history, continuing anyway..."
-          );
-        }
-      } catch (e) {
-        console.log("⚠️ Error clearing history, continuing anyway...", e);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Manual vote failed");
       }
 
-      // Step 2: Check the ACTUAL proposal status from the voting contract
-      console.log("📊 Checking actual proposal status from voting contract...");
-
-      let actualProposalStatus = latestProposal.status || "Created";
-      console.log(
-        `📋 Found proposal #${proposalId} with status: ${actualProposalStatus}`
+      alert(
+        `Manual vote sent.\nProposal #${proposalId}\nVote: ${voteOption}\nTransaction: ${data.transactionHash || "pending"}`
       );
-
-      // Step 3: Determine execution reason based on ACTUAL status
-      let executionReason = "";
-      if (
-        actualProposalStatus === "CREATED" ||
-        actualProposalStatus === "PENDING"
-      ) {
-        executionReason = `Proposal status is ${actualProposalStatus} - needs execution to become VOTING/ACTIVE`;
-      } else if (
-        actualProposalStatus === "VOTING" ||
-        actualProposalStatus === "ACTIVE"
-      ) {
-        executionReason = `Proposal already ${actualProposalStatus} - testing re-execution`;
-      } else {
-        executionReason = `Status is ${actualProposalStatus} - testing execution`;
-      }
-
-      console.log(`🔍 Execution reason: ${executionReason}`);
-
-      // Step 4: Execute the proposal (should work now that history is cleared)
-      console.log(`🚀 Executing proposal #${proposalId}...`);
-
-      const executionResponse = await fetch(
-        `${Constants.API_URL}/api/vote/execute/${proposalId}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ force: true }),
-        }
-      );
-
-      const executionResult = await executionResponse.json();
-      console.log("🚀 Agent Contract Execution Result:", executionResult);
-
-      setTestResult(executionResult);
-
-      if (executionResult.success) {
-        const summary = `✅ Agent Contract Execution Complete!
-
-Proposal ID: #${executionResult.proposalId}
-Title: "${proposalTitle}"
-
-🔄 BEFORE: Status was ${actualProposalStatus}
-⚡ EXECUTION: ${executionReason}
-✅ AFTER: Check if status changed to VOTING/ACTIVE
-
-Transaction Hash: ${executionResult.execution.transactionHash}
-Timestamp: ${new Date(executionResult.execution.timestamp).toLocaleTimeString()}
-
-🔗 View on NearBlocks: https://nearblocks.io/txns/${
-          executionResult.execution.transactionHash
-        }
-
-💡 To verify success: Refresh the page and check if proposal #${proposalId} status changed to VOTING/ACTIVE`;
-
-        alert(summary);
-
-        // Refresh proposals to see if status changed
-        if (typeof refetchProposals === "function") {
-          console.log("🔄 Refreshing proposals to check status change...");
-          setTimeout(() => refetchProposals(), 1000); // Wait 1 second for blockchain update
-        }
-      } else {
-        let errorMsg = `❌ Agent Contract Execution Still Failed: ${executionResult.error}
-
-Current proposal status: ${actualProposalStatus}
-${executionReason}
-
-Even after clearing backend history, the execution failed.
-This suggests a deeper issue with the agent contract or cross-contract call.`;
-
-        alert(errorMsg);
-      }
     } catch (error) {
-      console.error("Real execution test failed:", error);
-      const errorResult = {
-        success: false,
-        error: error.message,
-        type: "agent_contract_execution",
-      };
-      setTestResult(errorResult);
-
-      alert(`❌ Agent Contract Execution Failed: ${error.message}`);
+      console.error("Manual vote failed:", error);
+      alert(`Manual vote failed: ${error.message}`);
     } finally {
-      setIsExecuting(false);
+      setActionLoading(null);
     }
   };
 
@@ -354,7 +303,7 @@ This suggests a deeper issue with the agent contract or cross-contract call.`;
             <h2 className="mb-0">🤖 Votron</h2>
           </div>
           <div className="mb-1">
-            <h3>Autonomous Reviewer</h3>
+            <h3>Autonomous Voter</h3>
           </div>
 
           {/* Real-time status */}
@@ -390,7 +339,7 @@ This suggests a deeper issue with the agent contract or cross-contract call.`;
 
           {/* Buttons for Testing */}
           <div className="d-flex gap-2 flex-wrap">
-            {/* <Connect accountId={accountId} />
+            <Connect accountId={accountId} />
             <button
               className="btn btn-success btn-sm"
               style={{ minWidth: "140px" }}
@@ -399,11 +348,29 @@ This suggests a deeper issue with the agent contract or cross-contract call.`;
               title={!accountId ? "Sign in required" : "Create a proposal"}
             >
               📝 Create Proposal
-            </button> */}
+            </button>
+            <button
+              className="btn btn-outline-success btn-sm"
+              style={{ minWidth: "160px" }}
+              onClick={createSampleProposal}
+              disabled={!accountId || actionLoading === "create"}
+              title={!accountId ? "Sign in required" : "Create sample proposal"}
+            >
+              {actionLoading === "create" ? "Creating..." : "Create Sample"}
+            </button>
+            <button
+              className="btn btn-outline-warning btn-sm"
+              style={{ minWidth: "160px" }}
+              onClick={approveProposal}
+              disabled={!accountId || actionLoading === "approve"}
+              title={!accountId ? "Sign in required" : "Approve proposal"}
+            >
+              {actionLoading === "approve" ? "Approving..." : "Approve (Screen)"}
+            </button>
             <button
               className="btn btn-outline-primary btn-sm"
               style={{ minWidth: "140px" }}
-              onClick={testScreening}
+              onClick={testEvaluation}
               disabled={isDeciding}
             >
               {isDeciding ? (
@@ -412,23 +379,16 @@ This suggests a deeper issue with the agent contract or cross-contract call.`;
                   Testing...
                 </>
               ) : (
-                <>Test Decision</>
+                <>Test Evaluation</>
               )}
             </button>
             <button
-              className="btn btn-outline-primary btn-sm"
+              className="btn btn-outline-secondary btn-sm"
               style={{ minWidth: "140px" }}
-              onClick={testExecution}
-              disabled={isExecuting}
+              onClick={manualVote}
+              disabled={actionLoading === "manualVote"}
             >
-              {isExecuting ? (
-                <>
-                  <span className="spinner-border spinner-border-sm me-2"></span>
-                  Executing...
-                </>
-              ) : (
-                <> Test Approval</>
-              )}
+              {actionLoading === "manualVote" ? "Voting..." : "Manual Vote"}
             </button>
           </div>
         </div>
@@ -444,45 +404,41 @@ This suggests a deeper issue with the agent contract or cross-contract call.`;
           >
             <h6 className={testResult.success ? "text-success" : "text-danger"}>
               {testResult.success ? "✅" : "❌"} Test Result:{" "}
-              {testResult.testType}
+              {testResult.recommendation ? "evaluation" : "error"}
             </h6>
 
-            {testResult.success &&
-              testResult.testType === "ai_evaluation_only" && (
-                <div>
-                  <p>
-                    <strong>AI Decision:</strong>
-                    <span
-                      className={
-                        testResult.aiDecision.approved
-                          ? "text-success"
-                          : "text-warning"
-                      }
-                    >
-                      {testResult.aiDecision.approved
-                        ? " APPROVED"
-                        : " REJECTED"}
-                    </span>
-                  </p>
-                  <small>
-                    Reasons: {testResult.aiDecision.reasons.join(", ")}
-                  </small>
-                </div>
-              )}
-
-            {testResult.success && testResult.testType === "execution_test" && (
+            {testResult.success && (
               <div>
-                <p>
-                  <strong>Proposal:</strong> {testResult.proposalId}
+                <p className="mb-1">
+                  <strong>Proposal:</strong>{" "}
+                  {testResult.proposalTitle
+                    ? `${testResult.proposalTitle} (#${testResult.proposalId})`
+                    : `#${testResult.proposalId}`}
                 </p>
-                <p>
-                  <strong>Result:</strong>{" "}
-                  {testResult.execution.action.toUpperCase()}
+                <p className="mb-1">
+                  <strong>Recommendation:</strong>{" "}
+                  <span
+                    className={
+                      testResult.recommendation === "For"
+                        ? "text-success"
+                        : testResult.recommendation === "Against"
+                        ? "text-danger"
+                        : "text-secondary"
+                    }
+                  >
+                    {testResult.recommendation}
+                  </span>
                 </p>
-                {testResult.execution.transactionHash && (
+                <p className="mb-1">
+                  <strong>Verified From Chain:</strong>{" "}
+                  {testResult.verifiedFromChain ? "Yes" : "No"}
+                </p>
+                {testResult.reasons && (
                   <small>
-                    TX: {testResult.execution.transactionHash.substring(0, 20)}
-                    ...
+                    Reasons:{" "}
+                    {Array.isArray(testResult.reasons)
+                      ? testResult.reasons.join(", ")
+                      : testResult.reasons}
                   </small>
                 )}
               </div>
@@ -503,7 +459,7 @@ This suggests a deeper issue with the agent contract or cross-contract call.`;
         <div className="mb-4">
           <Proposals
             accountId={accountId}
-            executionHistory={executionHistory}
+            agentAccountId={agentStatus?.agentContract?.agentAccountId}
             onRefreshAgent={fetchAllAgentData}
           />
         </div>

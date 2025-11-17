@@ -39,8 +39,6 @@ class AgentCallQueue {
       };
 
       this.queue.push(queueItem);
-      console.log(`🔄 Queued agent call. Queue length: ${this.queue.length}`);
-
       this.processQueue().catch((err) =>
         console.error("Queue processing error:", err)
       );
@@ -81,8 +79,10 @@ class AgentCallQueue {
     const { call, resolve, reject, retryCount } = queueItem;
 
     try {
-      const result = await this.callWithTimeout(call, this.OPERATION_TIMEOUT_MS);
-      console.log(`☑️ Queued call completed successfully`);
+      const result = await this.callWithTimeout(
+        call,
+        this.OPERATION_TIMEOUT_MS
+      );
       resolve(result);
     } catch (error: any) {
       console.error(

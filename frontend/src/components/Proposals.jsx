@@ -1,18 +1,17 @@
 import { useState, useMemo, useEffect } from "react";
+import { near } from "../hooks/fastnear.js";
 import { useProposals } from "../hooks/useProposals.js";
 import { ProposalCard } from "./ProposalCard.jsx";
 import { Constants } from "../hooks/constants.js";
 
 const PROPOSALS_PER_PAGE = 10;
 
-export function Proposals({
-  accountId,
-  executionHistory = [],
-  onRefreshAgent,
-}) {
+export function Proposals({ accountId, agentAccountId, onRefreshAgent }) {
   const [statusFilter, setStatusFilter] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
-  const [evaluationData, setScreeningData] = useState({});
+  const [voteData, setVoteData] = useState({});
+  const [agentVotes, setAgentVotes] = useState({});
+  const [voterMap, setVoterMap] = useState({});
 
   // Get current proposals from voting contract
   const { proposals, loading, error, refetch } = useProposals(
@@ -51,49 +50,141 @@ export function Proposals({
         }
       });
 
-      setScreeningData(aiData);
+      setVoteData(aiData);
     };
 
     fetchScreeningStatus();
   }, [proposals]);
 
-  // Create lookup for execution results by proposal ID
-  const executionLookup = useMemo(() => {
+  // Fetch on-chain vote by agent account (if available)
+  useEffect(() => {
+    const fetchAgentVotes = async () => {
+      const voterAccount =
+        agentAccountId || "ac-proxy.neargov.testnet"; // default to known agent
+      if (!voterAccount || !proposals.length || typeof near === "undefined") {
+        return;
+      }
+
+      try {
+        const votePromises = proposals.map(async (proposal) => {
+          try {
+            const voteIdx = await near.view({
+              contractId: proposal.contractId,
+              methodName: "get_vote",
+              args: {
+                account_id: voterAccount,
+                proposal_id: proposal.id,
+              },
+            });
+
+            if (voteIdx === null || voteIdx === undefined) {
+              return null;
+            }
+
+            const normalizedIdx =
+              typeof voteIdx === "string"
+                ? parseInt(voteIdx, 10)
+                : typeof voteIdx === "number"
+                ? voteIdx
+                : null;
+
+            if (normalizedIdx === null || Number.isNaN(normalizedIdx)) {
+              return null;
+            }
+
+            const options =
+              proposal.voting_options ||
+              proposal.metadata?.voting_options ||
+              proposal.vote_options ||
+              [];
+
+            const selectedOption =
+              options[normalizedIdx] ||
+              `Option ${normalizedIdx + 1 || normalizedIdx}`;
+
+            return {
+              proposalId: proposal.id,
+              selectedOption,
+              voter: voterAccount,
+            };
+          } catch (error) {
+            console.error(
+              `Failed to fetch on-chain agent vote for proposal ${proposal.id}:`,
+              error
+            );
+            return null;
+          }
+        });
+
+        const results = await Promise.all(votePromises);
+        const mapped = {};
+        results.forEach((res) => {
+          if (res?.proposalId) {
+            mapped[res.proposalId] = res;
+          }
+        });
+        setAgentVotes(mapped);
+        setVoterMap((prev) => ({ ...prev, ...mapped }));
+      } catch (error) {
+        console.error("Failed to fetch agent votes:", error);
+      }
+    };
+
+    fetchAgentVotes();
+  }, [agentAccountId, proposals]);
+
+  const voteLookup = useMemo(() => {
     const lookup = {};
-
-    // Add execution history data
-    executionHistory.forEach((execution) => {
-      lookup[execution.proposalId] = { ...execution, type: "execution" };
-    });
-
-    // Add AI screening data
-    Object.entries(evaluationData).forEach(([proposalId, aiData]) => {
-      if (!lookup[proposalId] && aiData.screened) {
+    Object.entries(voteData).forEach(([proposalId, data]) => {
+      if (data.evaluated) {
         lookup[proposalId] = {
           proposalId,
-          approved: aiData.approved,
-          reasons: aiData.reasons,
-          timestamp: aiData.timestamp,
-          success: aiData.approved,
-          type: "ai_evaluation",
+          selectedOption: data.selectedOption,
+          reasons: data.reasons,
+          timestamp: data.timestamp,
+          executed: data.executed,
+          voter:
+            data.voter ||
+            data.agentAccountId ||
+            data.accountId ||
+            data.voterId ||
+            null,
         };
       }
     });
-
+    Object.entries(agentVotes).forEach(([proposalId, data]) => {
+      if (!lookup[proposalId]) {
+          lookup[proposalId] = {};
+      }
+      lookup[proposalId] = {
+        ...lookup[proposalId],
+        selectedOption:
+          lookup[proposalId].selectedOption || data.selectedOption,
+        voter: data.voter || lookup[proposalId].voter,
+      };
+    });
+    Object.entries(voterMap).forEach(([proposalId, data]) => {
+      if (!lookup[proposalId]) {
+        lookup[proposalId] = {};
+      }
+      lookup[proposalId].voter = lookup[proposalId].voter || data.voter;
+      lookup[proposalId].selectedOption =
+        lookup[proposalId].selectedOption || data.selectedOption;
+    });
     return lookup;
-  }, [executionHistory, evaluationData]);
+  }, [voteData, agentVotes, voterMap]);
 
   // Filter proposals by status
   const filteredProposals = useMemo(() => {
     if (statusFilter === "all") return proposals;
-    if (statusFilter === "agent-processed") {
-      return proposals.filter((p) => executionLookup[p.id]);
+    if (statusFilter === "agent-evaluated") {
+      return proposals.filter((p) => voteLookup[p.id]);
     }
-    if (statusFilter === "agent-approved") {
-      return proposals.filter((p) => executionLookup[p.id]?.success === true);
+    if (statusFilter === "agent-voted") {
+      return proposals.filter((p) => voteLookup[p.id]?.selectedOption);
     }
     if (statusFilter === "agent-failed") {
-      return proposals.filter((p) => executionLookup[p.id]?.success === false);
+      return proposals.filter((p) => !voteLookup[p.id]?.selectedOption);
     }
 
     const statusMap = {
@@ -105,7 +196,7 @@ export function Proposals({
     return proposals.filter((proposal) =>
       statusMap[statusFilter]?.includes(proposal.status)
     );
-  }, [proposals, statusFilter, executionLookup]);
+  }, [proposals, statusFilter, voteLookup]);
 
   // Pagination
   const totalPages = Math.ceil(filteredProposals.length / PROPOSALS_PER_PAGE);
@@ -117,28 +208,26 @@ export function Proposals({
 
   // Get counts for each status
   const statusCounts = useMemo(() => {
-    const agentProcessed = proposals.filter(
-      (p) => executionLookup[p.id]
-    ).length;
-    const agentApproved = proposals.filter(
-      (p) => executionLookup[p.id]?.success === true
+    const agentEvaluated = proposals.filter((p) => voteLookup[p.id]).length;
+    const agentVoted = proposals.filter(
+      (p) => voteLookup[p.id]?.selectedOption
     ).length;
     const agentFailed = proposals.filter(
-      (p) => executionLookup[p.id]?.success === false
+      (p) => !voteLookup[p.id]?.selectedOption
     ).length;
 
     return {
       all: proposals.length,
-      active: proposals.filter((p) => p.status === "Voting").length,
+      active: proposals.filter((p) => p.status === "Live").length,
       pending: proposals.filter((p) => p.status === "Created").length,
       finished: proposals.filter((p) =>
         ["Finished", "Approved", "Rejected"].includes(p.status)
       ).length,
-      "agent-processed": agentProcessed,
-      "agent-approved": agentApproved,
+      "agent-evaluated": agentEvaluated,
+      "agent-voted": agentVoted,
       "agent-failed": agentFailed,
     };
-  }, [proposals, executionLookup]);
+  }, [proposals, voteLookup]);
 
   const handleFilterChange = (newFilter) => {
     setStatusFilter(newFilter);
@@ -191,14 +280,14 @@ export function Proposals({
             { key: "pending", label: "Pending", count: statusCounts.pending },
             { key: "active", label: "Voting", count: statusCounts.active },
             {
-              key: "agent-processed",
-              label: "Agent Processed",
-              count: statusCounts["agent-processed"],
+              key: "agent-evaluated",
+              label: "Agent Evaluated",
+              count: statusCounts["agent-evaluated"],
             },
             {
-              key: "agent-approved",
-              label: "Agent Approved",
-              count: statusCounts["agent-approved"],
+              key: "agent-voted",
+              label: "Agent Voted",
+              count: statusCounts["agent-voted"],
             },
           ].map(({ key, label, count }) => (
             <li key={key} className="nav-item">
@@ -228,8 +317,8 @@ export function Proposals({
                 "No proposals are currently accepting votes."}
               {statusFilter === "pending" &&
                 "No proposals are awaiting review."}
-              {statusFilter === "agent-processed" &&
-                "No proposals have been processed by the agent yet."}
+              {statusFilter === "agent-evaluated" &&
+                "No proposals have been evaluated by the agent yet."}
               {statusFilter === "all" &&
                 "No proposals have been created yet. Create a test proposal to see the agent in action!"}
             </p>
@@ -243,7 +332,7 @@ export function Proposals({
                 key={`${proposal.contractId}-${proposal.id}`}
                 proposal={proposal}
                 compact={false}
-                agentExecution={executionLookup[proposal.id]}
+                voteStatus={voteLookup[proposal.id]}
               />
             ))}
           </div>

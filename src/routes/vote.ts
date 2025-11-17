@@ -73,6 +73,7 @@ export default function createAgentRoutes(
         proposalId,
         evaluated: false,
         message: "Proposal not yet evaluated",
+        agentAccountId: voter.agentAccountId,
       });
     }
 
@@ -84,6 +85,7 @@ export default function createAgentRoutes(
       timestamp: voteDecision.timestamp,
       executed: !!executionStatus?.executed,
       executionStatus,
+      agentAccountId: voter.agentAccountId,
     });
   });
 

@@ -5,7 +5,7 @@ export function Status() {
   const [workflowSteps, setWorkflowSteps] = useState([
     {
       id: 1,
-      name: "New Proposal Detected",
+      name: "Proposal Approved for Voting",
       status: "pending",
       timestamp: null,
       details: null,
@@ -19,14 +19,14 @@ export function Status() {
     },
     {
       id: 3,
-      name: "AI Decision Received",
+      name: "AI Vote Decision Received",
       status: "pending",
       timestamp: null,
       details: null,
     },
     {
       id: 4,
-      name: "Execute Agent Contract Call",
+      name: "Vote Cast On-Chain",
       status: "pending",
       timestamp: null,
       details: null,
@@ -119,11 +119,11 @@ export function Status() {
                   : [messageData];
 
                 for (const event of events) {
-                  if (event.event_event === "create_proposal") {
+                  if (event.event_event === "proposal_approve") {
                     const proposalId = event.event_data?.[0]?.proposal_id;
                     const title = event.event_data?.[0]?.title;
                     console.log(
-                      `🔥 LIVE WebSocket: New Proposal #${proposalId} - "${title}"`
+                      `🔥 LIVE WebSocket: Proposal approved for voting #${proposalId} - "${title}"`
                     );
                   }
                 }
@@ -259,7 +259,7 @@ export function Status() {
             },
           });
 
-          if (hasTxHash && hasProposalId && eventType === "create_proposal") {
+          if (hasTxHash && hasProposalId && eventType === "proposal_approve") {
             hasNewProposal = true;
             proposalId = hasProposalId.toString();
             proposalData = event.event_data[0];
@@ -280,12 +280,12 @@ export function Status() {
 
     if (hasNewProposal && proposalId) {
       console.log(
-        `🚀 Starting workflow tracking for NEW proposal ${proposalId}`
+        `🚀 Starting workflow tracking for proposal approved for voting ${proposalId}`
       );
       startWorkflowTracking(wsData, proposalId, proposalData);
     } else {
       console.log(
-        "📊 WebSocket activity detected but not a new proposal creation"
+        "📊 WebSocket activity detected but not a proposal approval"
       );
     }
   };
@@ -317,7 +317,7 @@ export function Status() {
     // Step 2: Now active
     setCurrentStep(2);
     updateStep(2, "active", detectionTime, {
-      action: "Sending to Claude AI for screening...",
+      action: "Sending to Claude AI for evaluation...",
     });
 
     // Start polling backend
@@ -362,67 +362,63 @@ export function Status() {
 
             console.log(`📊 Proposal data:`, proposalStatus);
 
-            if (proposalStatus.screened) {
-              console.log(`✅ DETECTED: Proposal ${proposalId} was screened!`);
+            if (proposalStatus.evaluated) {
+              console.log(`✅ DETECTED: Proposal ${proposalId} was evaluated!`);
 
-              const screeningTime = new Date(proposalStatus.timestamp);
+              const evaluationTime = new Date(proposalStatus.timestamp);
 
-              // Step 2: AI screening completed
-              updateStep(2, "completed", screeningTime, {
-                action: "Claude AI screening completed",
+              // Step 2: AI evaluation completed
+              updateStep(2, "completed", evaluationTime, {
+                action: "Claude AI evaluation completed",
               });
 
               // Step 3: AI decision received
-              const decision = proposalStatus.approved
-                ? "APPROVED"
-                : "NOT APPROVED";
-              updateStep(3, "completed", screeningTime, {
+              const decision = proposalStatus.selectedOption;
+              updateStep(3, "completed", evaluationTime, {
                 decision,
                 reasons: proposalStatus.reasons,
               });
 
-              setCurrentStep(proposalStatus.approved ? 4 : 5);
+              setCurrentStep(proposalStatus.selectedOption ? 4 : 5);
 
-              // Step 4: Check execution
-              if (proposalStatus.approved && proposalStatus.executed) {
-                // COMPLETE: Proposal approved AND executed
+              // Step 4: Check vote on-chain
+              if (proposalStatus.selectedOption && proposalStatus.executed) {
                 updateStep(4, "completed", new Date(), {
-                  action: "Agent contract executed approval",
+                  action: "Vote cast successfully",
                   transactionHash:
-                    proposalStatus.executionResult?.executionTxHash,
+                    proposalStatus.executionStatus?.executionTxHash,
                 });
 
                 // Stop polling - workflow complete!
-                console.log(
-                  `✅ WORKFLOW COMPLETE: Proposal ${proposalId} executed`
-                );
+                console.log(`✅ WORKFLOW COMPLETE: Proposal ${proposalId} voted`);
                 clearInterval(pollingIntervalRef.current);
                 pollingIntervalRef.current = null;
-              } else if (proposalStatus.approved && !proposalStatus.executed) {
-                // CONTINUE: Proposal approved but not yet executed
+              } else if (
+                proposalStatus.selectedOption &&
+                !proposalStatus.executed
+              ) {
+                // CONTINUE: Vote decided but not yet cast
                 updateStep(4, "active", new Date(), {
-                  action: "Waiting for agent contract execution...",
+                  action: "Waiting for vote to be cast on-chain...",
                 });
 
-                // Keep polling for execution
+                // Keep polling for vote casting
                 console.log(
-                  `🔄 CONTINUE POLLING: Waiting for execution of proposal ${proposalId}`
+                  `🔄 CONTINUE POLLING: Waiting for vote of proposal ${proposalId}`
                 );
               } else {
-                // SKIP: Proposal not approved
+                // SKIP: No vote decision available
                 updateStep(4, "skipped", new Date(), {
-                  reason: "Proposal not approved by AI",
+                  reason: "No vote cast by AI",
                 });
 
                 // Stop polling - workflow complete (but skipped execution)
-                console.log(
-                  `⏩ WORKFLOW COMPLETE: Proposal ${proposalId} not approved`
-                );
+                console.log(`⏩ WORKFLOW COMPLETE: Proposal ${proposalId} not voted`);
                 clearInterval(pollingIntervalRef.current);
                 pollingIntervalRef.current = null;
               }
             } else {
-              console.log(`⏳ Proposal ${proposalId} not yet screened`);
+              console.log(`⏳ Proposal ${proposalId} not yet evaluated`);
             }
           }
         }

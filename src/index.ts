@@ -27,7 +27,7 @@ import { fetchProposalInfo } from "./voting-utils";
 const VOTING_CONTRACT_ID =
   process.env.VOTING_CONTRACT_ID || "vote.ballotbox.testnet";
 const NEAR_RPC_JSON =
-  process.env.NEAR_RPC_JSON || "https://rpc.testnet.near.org";
+  process.env.NEAR_RPC_JSON || "https://rpc.testnet.fastnear.com";
 const VENEAR_CONTRACT_ID = process.env.VENEAR_CONTRACT_ID || "v.hos03.testnet";
 
 // Initialization
@@ -186,7 +186,7 @@ app.get("/api/agent-status", async (c) => {
     }
 
     const agentContract: string =
-      process.env.AGENT_ACCOUNT_ID || "ac-sandbox.votron.testnet";
+      process.env.AGENT_CONTRACT_ID || "ac-proxy.votron.testnet";
 
     try {
       const agentCheckResult = await queuedAgent("view", {
@@ -246,7 +246,7 @@ app.get("/api/agent-status", async (c) => {
   } catch (error: any) {
     console.error("❌ Agent status check failed:", error);
     const agentContractFallback: string =
-      process.env.AGENT_ACCOUNT_ID || "ac-sandbox.votron.testnet";
+      process.env.AGENT_ACCOUNT_ID || "ac-proxy.votron.testnet";
     return c.json(
       {
         error: error.message,

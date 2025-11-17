@@ -309,7 +309,7 @@ Description: ${proposal.description || "No description"}`;
 
     if (needsFullDetails) {
       const rpcUrl =
-        process.env.NEAR_RPC_JSON || "https://rpc.testnet.near.org";
+        process.env.NEAR_RPC_JSON || "https://rpc.testnet.fastnear.com";
       proposalDetails = await fetchProposalInfo(
         proposalId,
         this.votingContractId,
@@ -323,7 +323,8 @@ Description: ${proposal.description || "No description"}`;
 
     this.validateProposalStatus(proposalDetails);
 
-    const rpcUrl = process.env.NEAR_RPC_JSON || "https://rpc.testnet.near.org";
+    const rpcUrl =
+      process.env.NEAR_RPC_JSON || "https://rpc.testnet.fastnear.com";
     const agentAccountInfo = await queuedAgentAccountId().catch(() => null);
     const proxyAccountId =
       agentAccountInfo?.accountId || "ac-proxy.neargov.testnet";

@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-export function ProposalCard({ proposal, agentExecution }) {
+export function ProposalCard({ proposal, voteStatus }) {
   const [showDetails, setShowDetails] = useState(false);
 
   const getStatusBadge = (status) => {
@@ -8,7 +8,7 @@ export function ProposalCard({ proposal, agentExecution }) {
       Created: { class: "bg-warning text-dark", text: "Pending" },
       Rejected: { class: "bg-danger", text: "Rejected" },
       Approved: { class: "bg-primary", text: "Approved" },
-      Voting: { class: "bg-success", text: "Voting" },
+      Voting: { class: "bg-success", text: "Ready" },
       Finished: { class: "bg-dark", text: "Finished" },
     };
 
@@ -18,28 +18,6 @@ export function ProposalCard({ proposal, agentExecution }) {
     };
 
     return <span className={`badge ${config.class}`}>{config.text}</span>;
-  };
-
-  const getAgentExecutionBadge = (execution, proposalStatus) => {
-    if (!execution) {
-      return <span className="badge bg-dark">NOT PROCESSED</span>;
-    }
-
-    // Handle AI evaluation data
-    if (execution.type === "ai_evaluation") {
-      return execution.approved ? (
-        <span className="badge bg-success">APPROVED</span>
-      ) : (
-        <span className="badge bg-danger">NOT APPROVED</span>
-      );
-    }
-
-    // Handle agent execution data
-    if (execution.executed === false) {
-      return <span className="badge bg-danger">FAILED</span>;
-    }
-
-    return <span className="badge bg-success">APPROVED</span>;
   };
 
   const formatTimestamp = (timestamp) => {
@@ -92,25 +70,39 @@ export function ProposalCard({ proposal, agentExecution }) {
               {proposal.proposer_id}
             </code>
           </div>
-          <div className="d-flex justify-content-between align-items-center">
-            {(proposal.description ||
-              proposal.voting_end ||
-              proposal.deadline) && (
-              <button
-                className="btn btn-sm text-muted mt-2"
-                style={{
-                  background: "none",
-                  border: "none",
-                  padding: "0.25rem 0",
-                  textDecoration: "none",
-                }}
-                onClick={() => setShowDetails(!showDetails)}
-              >
-                {showDetails ? "▼ Hide Details" : "▶ Show Details"}
-              </button>
-            )}
-            <div style={backgroundBoxStyle}>
-              {getAgentExecutionBadge(agentExecution, proposal.status)}
+          <div className="d-flex justify-content-between align-items-start mt-1">
+            <div>
+              {(proposal.description ||
+                proposal.voting_end ||
+                proposal.deadline) && (
+                <button
+                  className="btn btn-sm text-muted"
+                  style={{
+                    background: "none",
+                    border: "none",
+                    padding: "0.25rem 0",
+                    textDecoration: "none",
+                  }}
+                  onClick={() => setShowDetails(!showDetails)}
+                >
+                  {showDetails ? "▼ Hide Details" : "▶ Show Details"}
+                </button>
+              )}
+            </div>
+            <div className="d-flex flex-column align-items-end gap-2">
+              {voteStatus && (
+                <div className="text-muted small text-end">
+                  Agent voted:{" "}
+                  <span className="fw-semibold">
+                    {voteStatus.selectedOption || voteStatus.selected_option
+                      ? (
+                          voteStatus.selectedOption ||
+                          voteStatus.selected_option
+                        ).toUpperCase()
+                      : "UNKNOWN"}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 

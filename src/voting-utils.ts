@@ -524,7 +524,7 @@ export async function castVote(
 
   const venearContract = process.env.VENEAR_CONTRACT_ID || "v.hos03.testnet";
   const nearRpcJson =
-    process.env.NEAR_RPC_JSON || "https://rpc.testnet.near.org";
+    process.env.NEAR_RPC_JSON || "https://rpc.testnet.fastnear.com";
 
   const { merkleProof, vAccount } = await fetchAccountProofForSnapshot(
     voterAccountId,
