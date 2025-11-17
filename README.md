@@ -40,11 +40,11 @@ Log in to docker, `docker login` for Mac or `sudo docker login` for Linux.
 1. **Create NEAR testnet account:**
 
 ```bash
-near account create-account sponsor-by-faucet-service <example-name.testnet> autogenerate-new-keypair print-to-terminal network-config testnet create
+near account create-account sponsor-by-faucet-service <example.testnet> autogenerate-new-keypair print-to-terminal network-config testnet create
 ```
 
 > [!IMPORTANT]
-> Be sure to record the account name and `seed phrase`!
+> Be sure to record the account name and seed phrase!
 
 2. **Get Phala Cloud API key:**
 
@@ -92,9 +92,9 @@ VENEAR_CONTRACT_ID=v.hos03.testnet
 NEAR_RPC_JSON=https://rpc.testnet.near.org
 ```
 
-4. **Start Docker:**
+### **Start Docker:**
 
-### Mac
+#### Mac
 
 Simply open the Docker Desktop application or run:
 
@@ -102,7 +102,7 @@ Simply open the Docker Desktop application or run:
 open -a Docker
 ```
 
-### Linux
+#### Linux
 
 ```bash
 sudo systemctl start docker
@@ -122,7 +122,7 @@ cd ..
 shade-agent-cli --wasm contract/target/near/contract.wasm --funding 5
 ```
 
-> The CLI on Linux may prompt you to enter your `sudo password`.
+_The CLI on Linux may prompt you to enter your `sudo password`._
 
 2. **Start agent in another terminal:**
 
@@ -151,7 +151,7 @@ The proxy contract is in `contract/`:
 shade-agent-cli --wasm contract/target/near/contract.wasm --funding 5
 ```
 
-> The CLI on Linux may prompt you to enter your `sudo password`.
+_The CLI on Linux may prompt you to enter your `sudo password`._
 
 The last URL the CLI outputs is where your app is hosted.
 

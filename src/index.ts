@@ -390,32 +390,83 @@ async function handleVote(proposalId: string, eventDetails: any) {
       console.log(`🕒 Voting start (ns): ${eventDetails.voting_start_time_ns}`);
     }
 
+    // Wait for proposal to be ready with snapshot to avoid redundant later fetches
     let fullProposal: ProposalData | null = null;
-    try {
-      fullProposal = await fetchProposalInfo(
-        proposalId,
-        VOTING_CONTRACT_ID,
-        NEAR_RPC_JSON
-      );
-      console.log(
-        `📋 Loaded proposal info: ${fullProposal.title || "Untitled proposal"}`
-      );
-      if (fullProposal.status) {
-        console.log(`📊 Current status: ${fullProposal.status}`);
-      }
-      if (
-        fullProposal.voting_start_time_ns &&
-        !eventDetails.voting_start_time_ns
-      ) {
+    const readinessDelays = [0, 300, 500, 800, 1200]; // progressive backoff in ms
+
+    for (let attempt = 0; attempt < readinessDelays.length; attempt++) {
+      if (attempt > 0) {
+        const delay = readinessDelays[attempt];
         console.log(
-          `🕒 Voting start (contract): ${fullProposal.voting_start_time_ns}`
+          `⏳ Waiting ${delay}ms for proposal snapshot (attempt ${
+            attempt + 1
+          }/${readinessDelays.length})...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+
+      try {
+        const proposal = await fetchProposalInfo(
+          proposalId,
+          VOTING_CONTRACT_ID,
+          NEAR_RPC_JSON
+        );
+
+        if (attempt === 0) {
+          console.log(
+            "🔍 Raw proposal status:",
+            typeof proposal.status,
+            JSON.stringify(proposal.status)
+          );
+        }
+
+        const hasSnapshot = !!proposal.snapshot_and_state?.snapshot;
+        const hasOptions =
+          Array.isArray(proposal.voting_options) &&
+          proposal.voting_options.length > 0;
+
+        console.log(
+          `📋 Loaded proposal info: ${proposal.title || "Untitled proposal"}`
+        );
+        console.log(
+          `📊 Status: ${proposal.status || "unknown"} | 📸 Snapshot: ${
+            hasSnapshot ? "present" : "missing"
+          } | 🗳️ Options: ${proposal.voting_options?.length || 0}`
+        );
+
+        if (
+          proposal.voting_start_time_ns &&
+          !eventDetails.voting_start_time_ns
+        ) {
+          console.log(
+            `🕒 Voting start (contract): ${proposal.voting_start_time_ns}`
+          );
+        }
+
+        if (!hasSnapshot || !hasOptions) {
+          console.log(
+            `⏸️ Proposal not ready yet (attempt ${attempt + 1}/${
+              readinessDelays.length
+            })`
+          );
+          continue;
+        }
+
+        console.log(
+          `✅ Proposal ${proposalId} ready with snapshot (attempt ${
+            attempt + 1
+          })`
+        );
+        fullProposal = proposal;
+        break;
+      } catch (error: any) {
+        console.warn(
+          `⚠️ Error fetching proposal ${proposalId} (attempt ${attempt + 1}/${
+            readinessDelays.length
+          }):`,
+          error.message
         );
       }
-    } catch (error: any) {
-      console.warn(
-        `⚠️ Could not fetch proposal ${proposalId} info:`,
-        error.message
-      );
     }
 
     if (!fullProposal) {
@@ -463,7 +514,8 @@ async function handleVote(proposalId: string, eventDetails: any) {
 
 // Event processing helpers
 function extractProposalId(event: any): string | null {
-  const proposalId = event.data?.[0]?.proposal_id;
+  const proposalId =
+    event.event_data?.[0]?.proposal_id ?? event.data?.[0]?.proposal_id;
   return proposalId !== undefined ? proposalId.toString() : null;
 }
 
@@ -476,7 +528,7 @@ function extractAccountId(event: any): string | null {
 }
 
 function extractProposalDetails(event: any) {
-  const eventData = event.data?.[0] || {};
+  const eventData = event.event_data?.[0] ?? event.data?.[0] ?? {};
   const startTimeSec = eventData.voting_start_time_sec;
   const startTimeNs =
     startTimeSec !== undefined && startTimeSec !== null
