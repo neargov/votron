@@ -18,6 +18,17 @@ pub struct MerkleProof {
     pub path: Vec<Base58CryptoHash>,
 }
 
+// Optional typed payload for manual serialization if needed elsewhere
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(crate = "near_sdk::serde")]
+#[schemars(crate = "schemars")]
+pub struct ProxyVoteArgs {
+    pub proposal_id: ProposalId,
+    pub vote: u8,
+    pub merkle_proof: MerkleProof,
+    pub v_account: VAccount,
+}
+
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(crate = "near_sdk::serde")]
 #[schemars(crate = "schemars")]

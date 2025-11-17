@@ -11,7 +11,7 @@ use traits::{ext_self, ext_voting, MerkleProof, ProposalId, SelfCallbacks, VAcco
 // Governance constants
 const GAS_FOR_GOVERNANCE: Gas = Gas::from_tgas(50);
 const GAS_FOR_CALLBACK: Gas = Gas::from_tgas(30);
-const YOCTO_DEPOSIT: NearToken = NearToken::from_yoctonear(1);
+const DEPOSIT: NearToken = NearToken::from_millinear(1); // 0.001 NEAR
 const VOTING_CONTRACT: &str = "vote.ballotbox.testnet";
 
 #[near(serializers = [json, borsh])]
@@ -60,29 +60,27 @@ impl Contract {
     // Governance functions
 
     pub fn cast_vote(
-        &mut self,
-        proposal_id: ProposalId,
-        vote: u8,
-        merkle_proof: MerkleProof,
-        v_account: VAccount,
-    ) -> Promise {
-        // self.require_approved_codehash();
+    &mut self,
+    proposal_id: ProposalId,
+    vote: u8,
+    merkle_proof: MerkleProof,
+    v_account: VAccount,
+) -> Promise {
+    env::log_str(&format!(
+        "🗳️ PROXY: Casting vote {} for proposal {}",
+        vote, proposal_id
+    ));
 
-        env::log_str(&format!(
-            "🗳️ PROXY: Casting vote {} for proposal {}",
-            vote, proposal_id
-        ));
-
-        ext_voting::ext(VOTING_CONTRACT.parse().unwrap())
-            .with_static_gas(GAS_FOR_GOVERNANCE)
-            .with_attached_deposit(YOCTO_DEPOSIT)
-            .vote(proposal_id, vote, merkle_proof, v_account)
-            .then(
-                ext_self::ext(env::current_account_id())
-                    .with_static_gas(GAS_FOR_CALLBACK)
-                    .vote_callback(proposal_id, vote)
-            )
-    }
+    ext_voting::ext(VOTING_CONTRACT.parse().unwrap())
+        .with_static_gas(GAS_FOR_GOVERNANCE)
+        .with_attached_deposit(DEPOSIT)
+        .vote(proposal_id, vote, merkle_proof, v_account)
+        .then(
+            ext_self::ext(env::current_account_id())
+                .with_static_gas(GAS_FOR_CALLBACK)
+                .vote_callback(proposal_id, vote)
+        )
+}
 
     // View functions
 

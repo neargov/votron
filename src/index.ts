@@ -11,34 +11,33 @@ import {
 
 try {
   dotenv.config({ path: ".env" });
+  dotenv.config({ path: ".env.development.local", override: false });
 } catch (e) {
   console.log("No local env file found, using system environment");
 }
 
-// Import services
+// Services
 import { Voter, VoteOption, VoteDecision } from "./voter";
 import createAgentRoutes from "./routes/vote";
 import createDebugRoutes from "./routes/debug";
 import type { ProposalData } from "./voting-utils";
 import { fetchProposalInfo } from "./voting-utils";
 
-import { agent, agentAccountId } from "@neardefi/shade-agent-js";
-
 // Configuration
 const VOTING_CONTRACT_ID =
-  process.env.VOTING_CONTRACT_ID || "shade.ballotbox.testnet";
+  process.env.VOTING_CONTRACT_ID || "vote.ballotbox.testnet";
 const NEAR_RPC_JSON =
   process.env.NEAR_RPC_JSON || "https://rpc.testnet.near.org";
 const VENEAR_CONTRACT_ID = process.env.VENEAR_CONTRACT_ID || "v.hos03.testnet";
 
-// Initialize voter
+// Initialization
 const voter = new Voter({
   apiKey: process.env.NEAR_AI_CLOUD_API_KEY,
   agentAccountId: process.env.AGENT_ACCOUNT_ID,
   votingContractId: process.env.VOTING_CONTRACT_ID,
 });
 
-// Testing
+// For testing
 const debugInfo = {
   lastWebSocketMessage: null as string | null,
   lastEventTime: null as string | null,
@@ -81,7 +80,7 @@ app.get("/", (c) => {
   });
 });
 
-// POST /api/evaluate - AI evaluation only (no vote cast)
+// POST /api/evaluate - AI evaluation only (no vote)
 app.post("/api/evaluate", async (c) => {
   try {
     const body = await c.req.json();
@@ -92,7 +91,6 @@ app.post("/api/evaluate", async (c) => {
 
     console.log(`🔍 AI evaluation only for proposal ${body.proposalId}...`);
 
-    // Fetch from chain
     const canonicalProposal = await fetchProposalInfo(
       body.proposalId,
       VOTING_CONTRACT_ID,
@@ -106,7 +104,6 @@ app.post("/api/evaluate", async (c) => {
       );
     }
 
-    // AI Evaluation only
     const decision = await voter.evaluateProposal(
       body.proposalId,
       canonicalProposal
@@ -201,7 +198,6 @@ app.get("/api/agent-status", async (c) => {
         args: { account_id: agentAccount },
       });
 
-      // Check if the result contains an error
       if (agentCheckResult?.error) {
         agentRegistered = false;
         agentInfo = agentCheckResult;
@@ -252,15 +248,17 @@ app.get("/api/agent-status", async (c) => {
     });
   } catch (error: any) {
     console.error("❌ Agent status check failed:", error);
+    const agentContractFallback: string =
+      process.env.AGENT_ACCOUNT_ID || "ac-sandbox.votron.testnet";
     return c.json(
       {
         error: error.message,
         agentContract: {
-          contractId: "ac-sandbox.votron.testnet",
+          contractId: agentContractFallback,
           connectionError: error.message,
         },
       },
-      200
+      500
     );
   }
 });
@@ -324,13 +322,13 @@ app.post("/api/manual-vote", async (c) => {
   }
 });
 
-// Shade Agent API routes (for library compatibility)
+// Shade Agent API routes
 function createShadeAgentApiRoutes() {
   const agentApiRoutes = new Hono();
 
   agentApiRoutes.post("/getAccountId", async (c) => {
     try {
-      const result = await agentAccountId();
+      const result = await queuedAgentAccountId();
       return c.json(result);
     } catch (error: any) {
       console.error("❌ Shade agent API error:", error);
@@ -340,7 +338,7 @@ function createShadeAgentApiRoutes() {
 
   agentApiRoutes.post("/getBalance", async (c) => {
     try {
-      const result = await agent("getBalance");
+      const result = await queuedAgent("getBalance");
       return c.json(result);
     } catch (error: any) {
       console.error("❌ Shade agent API error:", error);
@@ -351,7 +349,7 @@ function createShadeAgentApiRoutes() {
   agentApiRoutes.post("/call", async (c) => {
     try {
       const body = await c.req.json();
-      const result = await agent("call", body);
+      const result = await queuedAgent("call", body);
       return c.json(result);
     } catch (error: any) {
       console.error("❌ Shade agent API error:", error);
@@ -362,7 +360,7 @@ function createShadeAgentApiRoutes() {
   agentApiRoutes.post("/view", async (c) => {
     try {
       const body = await c.req.json();
-      const result = await agent("view", body);
+      const result = await queuedAgent("view", body);
       return c.json(result);
     } catch (error: any) {
       console.error("❌ Shade agent API error:", error);
@@ -374,7 +372,7 @@ function createShadeAgentApiRoutes() {
     try {
       const method = c.req.param("method");
       const body = await c.req.json();
-      const result = await agent(method, body);
+      const result = await queuedAgent(method, body);
       return c.json(result);
     } catch (error: any) {
       console.error("❌ Shade agent API error:", error);
@@ -450,28 +448,25 @@ async function handleVote(proposalId: string, eventDetails: any) {
       console.log(
         `🔗 Vote already cast on-chain: ${evaluation.executionResult.transactionHash}`
       );
-  } else if (evaluation?.selectedOption && fullProposal) {
-    console.log(
-      `ℹ️ Vote decision: ${evaluation.selectedOption} for proposal ${proposalId}`
-    );
-  } else {
-    console.log(
-      `ℹ️ Skipping vote for proposal ${proposalId}: ${
-        evaluation ? "no recorded voting choice" : "no evaluation result"
-      }`
+    } else if (evaluation?.selectedOption && fullProposal) {
+      console.log(
+        `ℹ️ Vote decision: ${evaluation.selectedOption} for proposal ${proposalId}`
+      );
+    } else {
+      console.log(
+        `ℹ️ Skipping vote for proposal ${proposalId}: ${
+          evaluation ? "no recorded voting choice" : "no evaluation result"
+        }`
       );
     }
   } catch (error: any) {
-    console.error(
-      `❌ Failed to process approval ${proposalId}:`,
-      error
-    );
+    console.error(`❌ Failed to process approval ${proposalId}:`, error);
   }
 }
 
 // Event processing helpers
 function extractProposalId(event: any): string | null {
-  const proposalId = event.event_data?.[0]?.proposal_id;
+  const proposalId = event.data?.[0]?.proposal_id;
   return proposalId !== undefined ? proposalId.toString() : null;
 }
 
@@ -484,7 +479,12 @@ function extractAccountId(event: any): string | null {
 }
 
 function extractProposalDetails(event: any) {
-  const eventData = event.event_data?.[0] || {};
+  const eventData = event.data?.[0] || {};
+  const startTimeSec = eventData.voting_start_time_sec;
+  const startTimeNs =
+    startTimeSec !== undefined && startTimeSec !== null
+      ? (BigInt(startTimeSec) * 1_000_000_000n).toString()
+      : undefined;
   return {
     proposalId: eventData.proposal_id,
     proposal_id: eventData.proposal_id,
@@ -492,9 +492,10 @@ function extractProposalDetails(event: any) {
     description: eventData.description,
     link: eventData.link,
     proposer_id: eventData.proposer_id,
+    reviewer_id: eventData.account_id,
     voting_options: eventData.voting_options,
-    reviewer_id: eventData.reviewer_id,
-    voting_start_time_ns: eventData.voting_start_time_ns,
+    voting_start_time_sec: startTimeSec,
+    voting_start_time_ns: startTimeNs,
   };
 }
 
@@ -529,16 +530,12 @@ async function startEventStream() {
       const contractFilter = {
         And: [
           {
-            path: "action.FunctionCall.receiver_id",
+            path: "account_id",
             operator: { Equals: VOTING_CONTRACT_ID },
           },
           {
             path: "event_event",
-            operator: { Equals: "approve_proposal" },
-          },
-          {
-            path: "action.FunctionCall.method_name",
-            operator: { Equals: "approve_proposal" },
+            operator: { Equals: "proposal_approve" },
           },
         ],
       };
@@ -554,7 +551,6 @@ async function startEventStream() {
       try {
         const text = data.toString();
 
-        // Store for debugging
         debugInfo.lastWebSocketMessage = text;
         debugInfo.lastEventTime = new Date().toISOString();
         debugInfo.wsMessageCount++;
@@ -567,28 +563,23 @@ async function startEventStream() {
         }
 
         const events = JSON.parse(text);
-        console.log("📨 Parsed events:", JSON.stringify(events, null, 2));
         const eventArray = Array.isArray(events) ? events : [events];
+
+        console.log("📨 Parsed events:", JSON.stringify(eventArray, null, 2));
 
         for (const event of eventArray) {
           const proposalId = extractProposalId(event);
           const eventType = extractEventType(event);
-          const accountId = extractAccountId(event);
 
-          if (accountId && accountId !== VOTING_CONTRACT_ID) {
-            continue;
-          }
-
-          if (!proposalId || !eventType) {
-            continue;
-          }
+          if (!proposalId || !eventType) continue;
 
           console.log(`🎯 PROCESSING ${eventType} for proposal ${proposalId}`);
+
           const eventDetails = extractProposalDetails(event);
 
           if (
-            eventType === "approve_proposal" ||
-            eventType.includes("approve")
+            eventType === "proposal_approve" ||
+            eventType === "approve_proposal"
           ) {
             await handleVote(proposalId, eventDetails);
           } else {
@@ -630,12 +621,12 @@ async function startEventStream() {
   }
 }
 
-// Start the server
+// Start server
 const port = Number(process.env.PORT || "3000");
 
 console.log(`🚀 Starting Proposal Reviewer Agent`);
 
-// Start proposal monitoring
+// Start monitoring
 if (VOTING_CONTRACT_ID) {
   setTimeout(() => {
     console.log(

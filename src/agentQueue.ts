@@ -1,4 +1,9 @@
-import { agent, agentAccountId, agentCall } from "@neardefi/shade-agent-js";
+import {
+  agent,
+  agentAccountId,
+  agentCall,
+  agentInfo,
+} from "@neardefi/shade-agent-js";
 
 interface QueueItem<T> {
   call: () => Promise<T>;
@@ -16,8 +21,14 @@ interface QueueStatus {
 class AgentCallQueue {
   private isProcessing: boolean = false;
   private queue: QueueItem<any>[] = [];
+  private readonly MAX_QUEUE_SIZE = 100;
+  private readonly OPERATION_TIMEOUT_MS = 30000;
 
   async enqueue<T>(call: () => Promise<T>): Promise<T> {
+    if (this.queue.length >= this.MAX_QUEUE_SIZE) {
+      throw new Error(`Queue full (max ${this.MAX_QUEUE_SIZE} items)`);
+    }
+
     return new Promise<T>((resolve, reject) => {
       const queueItem: QueueItem<T> = {
         call,
@@ -30,7 +41,9 @@ class AgentCallQueue {
       this.queue.push(queueItem);
       console.log(`🔄 Queued agent call. Queue length: ${this.queue.length}`);
 
-      this.processQueue();
+      this.processQueue().catch((err) =>
+        console.error("Queue processing error:", err)
+      );
     });
   }
 
@@ -40,54 +53,81 @@ class AgentCallQueue {
     }
 
     this.isProcessing = true;
-    console.log(`🚀 Processing queue with ${this.queue.length} items`);
 
-    while (this.queue.length > 0) {
-      const queueItem = this.queue.shift();
-      if (!queueItem) continue;
+    try {
+      while (this.queue.length > 0) {
+        const queueItem = this.queue.shift();
+        if (!queueItem) continue;
 
-      const { call, resolve, reject, timestamp, retryCount } = queueItem;
+        await this.processQueueItem(queueItem);
 
-      try {
-        console.log(
-          `⏳ Executing queued call (queued for ${
-            Date.now() - timestamp
-          }ms, attempt ${retryCount + 1})`
-        );
-        const result = await call();
-        console.log(`✅ Queued call completed successfully`);
-        resolve(result);
-      } catch (error: any) {
-        console.error(
-          `❌ Queued call failed (attempt ${retryCount + 1}):`,
-          error.message
-        );
-
-        // Retry logic for recoverable errors
-        if (retryCount < 2 && this.shouldRetry(error)) {
-          console.log(`🔄 Retrying call (attempt ${retryCount + 2}/3)`);
-
-          // Re-queue with incremented retry count
-          this.queue.unshift({
-            ...queueItem,
-            retryCount: retryCount + 1,
-          });
-
-          // Brief delay before retry
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        } else {
-          reject(error);
+        if (this.queue.length > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
         }
       }
-
-      // Small delay between calls to prevent nonce conflicts
+    } finally {
+      this.isProcessing = false;
       if (this.queue.length > 0) {
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        setImmediate(() => {
+          this.processQueue().catch((err) =>
+            console.error("Queue processing error:", err)
+          );
+        });
       }
     }
+  }
 
-    this.isProcessing = false;
-    console.log(`🏁 Queue processing complete`);
+  private async processQueueItem(queueItem: QueueItem<any>): Promise<void> {
+    const { call, resolve, reject, retryCount } = queueItem;
+
+    try {
+      const result = await this.callWithTimeout(call, this.OPERATION_TIMEOUT_MS);
+      console.log(`☑️ Queued call completed successfully`);
+      resolve(result);
+    } catch (error: any) {
+      console.error(
+        `❌ Queued call failed (attempt ${retryCount + 1}):`,
+        error.message
+      );
+
+      if (retryCount < 2 && this.shouldRetry(error)) {
+        console.log(`🔄 Retrying call (attempt ${retryCount + 2}/3)`);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        this.queue.unshift({
+          ...queueItem,
+          retryCount: retryCount + 1,
+          timestamp: Date.now(),
+        });
+      } else {
+        reject(error);
+      }
+    }
+  }
+
+  private async callWithTimeout<T>(
+    call: () => Promise<T>,
+    timeoutMs: number
+  ): Promise<T> {
+    let timeoutId: NodeJS.Timeout | undefined;
+    const callPromise = call();
+    callPromise.catch(() => {}); // silence late rejections if timeout wins
+
+    try {
+      return await Promise.race<T>([
+        callPromise,
+        new Promise<T>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error("Operation timed out")),
+            timeoutMs
+          );
+        }),
+      ]);
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
   }
 
   private shouldRetry(error: any): boolean {
@@ -96,7 +136,8 @@ class AgentCallQueue {
       errorMessage.includes("nonce") ||
       errorMessage.includes("timeout") ||
       errorMessage.includes("network") ||
-      errorMessage.includes("connection")
+      errorMessage.includes("connection") ||
+      errorMessage.includes("timed out")
     );
   }
 
@@ -108,10 +149,8 @@ class AgentCallQueue {
   }
 }
 
-// Create singleton instance
 const agentQueue = new AgentCallQueue();
 
-// Queued wrapper functions with proper typing
 export const queuedAgent = (method: string, args?: any): Promise<any> => {
   return agentQueue.enqueue(() => agent(method, args));
 };
@@ -120,17 +159,20 @@ export const queuedAgentAccountId = (): Promise<{ accountId: string }> => {
   return agentQueue.enqueue(() => agentAccountId());
 };
 
-export const queuedAgentCall = (args: {
+export const queuedAgentCall = (callArgs: {
   methodName: string;
   args: any;
   contractId?: string;
   gas?: string | number;
   deposit?: string | number;
 }): Promise<any> => {
-  return agentQueue.enqueue(() => agentCall(args));
+  return agentQueue.enqueue(() => agentCall(callArgs));
 };
 
-// Queue status for debugging
+export const queuedAgentInfo = (): Promise<any> => {
+  return agentQueue.enqueue(() => agentInfo());
+};
+
 export const getQueueStatus = (): QueueStatus => {
   return agentQueue.getStatus();
 };

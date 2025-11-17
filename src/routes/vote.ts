@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { agent, agentAccountId, agentInfo } from "@neardefi/shade-agent-js";
+import { queuedAgent, queuedAgentAccountId, queuedAgentInfo } from "../agentQueue";
 import { Voter } from "../voter";
 import { fetchProposalInfo, type ProposalData } from "../voting-utils";
 
@@ -151,8 +151,8 @@ export default function createAgentRoutes(
 
   routes.get("/agent-info", async (c) => {
     try {
-      const accountInfo = await agentAccountId();
-      const agentDetails = await agentInfo();
+      const accountInfo = await queuedAgentAccountId();
+      const agentDetails = await queuedAgentInfo();
 
       return c.json({
         agentAccountId: accountInfo.accountId,
@@ -227,8 +227,8 @@ export default function createAgentRoutes(
 
   routes.get("/balance", async (c) => {
     try {
-      const balance = await agent("getBalance");
-      const accountId = await agentAccountId();
+      const balance = await queuedAgent("getBalance");
+      const accountId = await queuedAgentAccountId();
 
       return c.json({
         agentAccount: accountId.accountId,

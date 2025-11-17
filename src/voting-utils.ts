@@ -1,4 +1,8 @@
-import { queuedAgentAccountId, queuedAgentCall } from "./agentQueue";
+import {
+  queuedAgentAccountId,
+  queuedAgentCall,
+  queuedAgent,
+} from "./agentQueue";
 import type { VoteOption } from "./voter";
 
 export interface ProposalData {
@@ -237,12 +241,154 @@ function parseBlockHeightValue(value: number | string | undefined): number {
   return blockHeight;
 }
 
+export async function checkVoteRecordedOnChain(
+  proposalId: string | number,
+  accountId: string,
+  votingContractId: string,
+  rpcUrl: string,
+  maxRetries: number = 2
+): Promise<{ recorded: boolean; verified: boolean }> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = attempt === 1 ? 300 : 500;
+      console.log(
+        `⏳ Retrying vote verification after ${delay}ms (attempt ${
+          attempt + 1
+        }/${maxRetries + 1})...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+
+    try {
+      const payload = {
+        jsonrpc: "2.0",
+        id: "get-vote",
+        method: "query",
+        params: {
+          request_type: "call_function",
+          finality: "final",
+          account_id: votingContractId,
+          method_name: "get_vote",
+          args_base64: Buffer.from(
+            JSON.stringify({
+              account_id: accountId,
+              proposal_id: parseInt(proposalId as any),
+            })
+          ).toString("base64"),
+        },
+      };
+
+      const res = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        console.warn(
+          `⚠️ get_vote HTTP ${res.status} while verifying vote (attempt ${
+            attempt + 1
+          }/${maxRetries + 1})`
+        );
+        if (attempt < maxRetries) continue;
+        return { recorded: false, verified: false };
+      }
+
+      const json = await res.json();
+
+      if (!json.result?.result) {
+        if (attempt < maxRetries) {
+          console.log(
+            `ℹ️ Vote not found on-chain yet (attempt ${attempt + 1}/${
+              maxRetries + 1
+            }), retrying...`
+          );
+          continue;
+        }
+        console.warn(
+          `⚠️ Vote not found after ${maxRetries + 1} verification attempts`
+        );
+        return { recorded: false, verified: true };
+      }
+
+      const decoded = Buffer.from(json.result.result).toString("utf-8");
+
+      try {
+        const parsed = JSON.parse(decoded);
+        const recorded = parsed !== null && parsed !== undefined;
+        if (recorded) {
+          console.log(
+            `✅ Vote verified on-chain (attempt ${attempt + 1}/${
+              maxRetries + 1
+            })`
+          );
+          return { recorded: true, verified: true };
+        }
+        if (attempt < maxRetries) {
+          console.log(
+            `ℹ️ Vote shows as null/undefined (attempt ${attempt + 1}/${
+              maxRetries + 1
+            }), retrying...`
+          );
+          continue;
+        }
+        return { recorded: false, verified: true };
+      } catch (parseErr) {
+        console.warn(
+          `⚠️ Failed to parse get_vote response (attempt ${attempt + 1}/${
+            maxRetries + 1
+          }):`,
+          decoded.substring(0, 200)
+        );
+        return { recorded: false, verified: false };
+      }
+    } catch (err: any) {
+      console.warn(
+        `⚠️ get_vote check failed (attempt ${attempt + 1}/${maxRetries + 1}):`,
+        err?.message || String(err)
+      );
+      if (attempt < maxRetries) continue;
+      return { recorded: false, verified: false };
+    }
+  }
+
+  return { recorded: false, verified: false };
+}
+
 export async function fetchAccountProofForSnapshot(
   accountId: string,
   snapshotState: SnapshotAndState,
   VENEAR_CONTRACT_ID: string,
   NEAR_RPC_JSON: string
-): Promise<{ merkleProof: any; vAccount: any }> {
+): Promise<{
+  merkleProof: { index?: number; [key: string]: any };
+  vAccount: any;
+}> {
+  type RpcCallFunctionResponse = {
+    jsonrpc: string;
+    id?: string | number;
+    error?: { message: string };
+    result?: {
+      result?: number[];
+      block_height?: number;
+      block_hash?: string;
+      logs?: string[];
+    };
+  };
+
+  type MerkleProofRaw = {
+    index?: number | string;
+    [key: string]: any;
+  };
+
+  const normalizeProof = (
+    proof: MerkleProofRaw
+  ): { index?: number; [key: string]: any } => {
+    const normalizedIndex =
+      typeof proof.index === "string" ? parseInt(proof.index, 10) : proof.index;
+    return { ...proof, index: normalizedIndex };
+  };
+
   if (!snapshotState?.snapshot) {
     throw new Error("Snapshot data is missing for this proposal");
   }
@@ -266,6 +412,20 @@ export async function fetchAccountProofForSnapshot(
     },
   };
 
+  console.log(
+    "📡 Fetching account proof",
+    JSON.stringify(
+      {
+        accountId,
+        venearAccountId: VENEAR_CONTRACT_ID,
+        blockHeight,
+        rpcUrl: NEAR_RPC_JSON,
+      },
+      null,
+      2
+    )
+  );
+
   const res = await fetch(NEAR_RPC_JSON, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -276,7 +436,9 @@ export async function fetchAccountProofForSnapshot(
     throw new Error(`Proof RPC request failed: ${res.status}`);
   }
 
-  const json = await res.json();
+  const json: RpcCallFunctionResponse = await res.json();
+
+  console.log("🔍 Proof RPC raw response:", JSON.stringify(json, null, 2));
 
   if (json.error) {
     throw new Error(`Proof RPC error: ${json.error.message}`);
@@ -286,21 +448,46 @@ export async function fetchAccountProofForSnapshot(
     throw new Error("Proof RPC response missing result data");
   }
 
-  const decoded = Buffer.from(json.result.result).toString("utf-8");
-  const parsed = JSON.parse(decoded);
+  const bytes: number[] = json.result.result;
+  const decoded = Buffer.from(bytes).toString("utf-8");
 
+  let parsed: any;
+  try {
+    parsed = JSON.parse(decoded);
+  } catch (e) {
+    console.error("❌ Failed to parse proof response JSON:", decoded);
+    throw new Error("Failed to parse proof response JSON");
+  }
+
+  // Expected shape: [merkleProof, vAccount]
   if (Array.isArray(parsed)) {
-    const [merkleProof, vAccount] = parsed;
-    return { merkleProof, vAccount };
+    const [merkleProof, vAccount] = parsed as [MerkleProofRaw, any];
+    const normalizedProof = normalizeProof(merkleProof || {});
+    console.log(
+      "✅ Normalized merkle proof:",
+      JSON.stringify(normalizedProof, null, 2)
+    );
+    return { merkleProof: normalizedProof, vAccount };
   }
 
   if (parsed?.merkle_proof && parsed?.v_account) {
+    const normalizedProof = normalizeProof(
+      parsed.merkle_proof as MerkleProofRaw
+    );
+    console.log(
+      "✅ Normalized merkle proof:",
+      JSON.stringify(normalizedProof, null, 2)
+    );
     return {
-      merkleProof: parsed.merkle_proof,
+      merkleProof: normalizedProof,
       vAccount: parsed.v_account,
     };
   }
 
+  console.error(
+    "❌ Unexpected proof response structure after decode:",
+    JSON.stringify(parsed, null, 2)
+  );
   throw new Error("Unexpected proof response structure");
 }
 
@@ -322,11 +509,17 @@ export async function castVote(
     proposal.voting_options,
     selectedOption
   );
-  const accountInfo = await queuedAgentAccountId();
-  const accountId = accountInfo.accountId;
+
+  // Votes are submitted via proxy contract; proof must match its account ID
+  const agentAccountInfo = await queuedAgentAccountId().catch(() => null);
+  const proxyContractId =
+    process.env.NEXT_PUBLIC_contractId ||
+    agentAccountInfo?.accountId ||
+    "ac-proxy.neargov.testnet";
+  const voterAccountId = proxyContractId;
 
   console.log(
-    `🗳️ Preparing vote (${selectedOption}) for proposal ${proposalId} as ${accountId}`
+    `🗳️ Preparing vote (${selectedOption}) for proposal ${proposalId} as ${voterAccountId}`
   );
 
   const venearContract = process.env.VENEAR_CONTRACT_ID || "v.hos03.testnet";
@@ -334,26 +527,46 @@ export async function castVote(
     process.env.NEAR_RPC_JSON || "https://rpc.testnet.near.org";
 
   const { merkleProof, vAccount } = await fetchAccountProofForSnapshot(
-    accountId,
+    voterAccountId,
     proposal.snapshot_and_state,
     venearContract,
     nearRpcJson
   );
 
-  const voteResult = await queuedAgentCall({
-    contractId: VOTING_CONTRACT_ID,
-    methodName: "vote",
+  console.log(
+    `📡 Sending vote via proxy contract ${proxyContractId} with method cast_vote`
+  );
+
+  const voteResultRaw = await queuedAgent("functionCall", {
+    contractId: proxyContractId,
+    methodName: "cast_vote",
     args: {
       proposal_id: parseInt(proposalId),
       vote: voteIndex,
       merkle_proof: merkleProof,
       v_account: vAccount,
     },
-    deposit: "1",
+    gas: "300000000000000",
+    attachedDeposit: "1000000000000000000000", // 0.001 NEAR
   });
 
-  if (voteResult?.error) {
-    throw new Error(voteResult.error);
+  if (voteResultRaw?.error) {
+    throw new Error(voteResultRaw.error);
+  }
+
+  let voteResult: any = voteResultRaw;
+  if (typeof voteResultRaw === "string") {
+    const trimmed = voteResultRaw.trim();
+    if (!trimmed) {
+      voteResult = {};
+    } else {
+      voteResult = { hash: trimmed };
+    }
+  } else if (!voteResultRaw || typeof voteResultRaw !== "object") {
+    console.warn(
+      "ℹ️ Agent call returned an unexpected response; proceeding without tx hash"
+    );
+    voteResult = {};
   }
 
   const txHash =
@@ -365,13 +578,38 @@ export async function castVote(
     voteResult?.transaction_outcome?.id ||
     null;
 
-  if (txHash) {
-    console.log(`✅ Vote submitted for proposal ${proposalId}: ${txHash}`);
-  } else {
-    console.log(
-      `✅ Vote submitted for proposal ${proposalId} (no tx hash reported)`
+  const outcomeId =
+    voteResult?.transaction_outcome?.id ||
+    voteResult?.transaction?.hash ||
+    voteResult?.hash ||
+    null;
+
+  if (!txHash && !outcomeId) {
+    const { recorded, verified } = await checkVoteRecordedOnChain(
+      proposalId,
+      voterAccountId,
+      VOTING_CONTRACT_ID,
+      nearRpcJson,
+      2
     );
+
+    if (verified && recorded) {
+      console.log(
+        `✅ Vote verified on-chain despite missing tx hash after retries`
+      );
+    } else if (verified && !recorded) {
+      throw new Error(
+        "Vote not recorded on-chain after verification (tried 3 times over ~800ms)"
+      );
+    } else {
+      console.warn(
+        "⚠️ Vote verification unavailable (RPC/parse error); proceeding without on-chain confirmation"
+      );
+    }
   }
 
-  return { transactionHash: txHash || undefined };
+  console.log(`✅ Vote cast successfully on proposal ${proposalId}`);
+
+  // Even if no txn hash is returned, consider call successful
+  return { transactionHash: txHash || outcomeId || undefined };
 }

@@ -1,4 +1,10 @@
-import { castVote, fetchProposalInfo, type ProposalData } from "./voting-utils";
+import {
+  castVote,
+  fetchProposalInfo,
+  checkVoteRecordedOnChain,
+  type ProposalData,
+} from "./voting-utils";
+import { queuedAgentAccountId } from "./agentQueue";
 
 export type VoteOption = "For" | "Against" | "Abstain";
 
@@ -83,7 +89,7 @@ export class Voter {
     console.log(`🔍 AI evaluating proposal ${id}: "${proposal.title}"`);
 
     try {
-      // ASK AI FOR DECISION
+      // Ask AI for decision
       const aiDecision = await this.askAI(proposal);
       const result = this.saveResult(
         id,
@@ -313,7 +319,26 @@ Description: ${proposal.description || "No description"}`;
 
     this.validateProposalStatus(proposalDetails);
 
-    let voteResult: { transactionHash?: string };
+    const rpcUrl = process.env.NEAR_RPC_JSON || "https://rpc.testnet.near.org";
+    const agentAccountInfo = await queuedAgentAccountId().catch(() => null);
+    const proxyAccountId =
+      agentAccountInfo?.accountId || "ac-proxy.neargov.testnet";
+
+    const hasVotedOnChain = await this.checkIfAlreadyVoted(
+      proposalId,
+      proxyAccountId,
+      this.votingContractId,
+      rpcUrl
+    );
+
+    if (hasVotedOnChain) {
+      console.log(
+        `ℹ️ Account ${proxyAccountId} already voted on proposal ${proposalId}`
+      );
+      throw new Error(`Already voted on proposal ${proposalId}`);
+    }
+
+    let voteResult: { transactionHash?: string; alreadyVoted?: boolean };
     try {
       voteResult = await castVote(
         proposalId,
@@ -327,7 +352,7 @@ Description: ${proposal.description || "No description"}`;
         console.log(
           `ℹ️ Proposal ${proposalId} already voted for ${selectedOption}, recording status`
         );
-        voteResult = { transactionHash: undefined };
+        voteResult = { transactionHash: undefined, alreadyVoted: true };
       } else {
         throw error;
       }
@@ -339,13 +364,14 @@ Description: ${proposal.description || "No description"}`;
       executionTxHash: voteResult.transactionHash,
       executedAt: timestamp,
       success: true,
-      alreadyVoted: voteResult.transactionHash === undefined,
+      alreadyVoted: voteResult.alreadyVoted === true,
     });
 
     return {
       action: "succeeded",
       transactionHash: voteResult.transactionHash,
       timestamp,
+      alreadyVoted: voteResult.alreadyVoted === true,
     };
   }
 
@@ -374,6 +400,27 @@ Description: ${proposal.description || "No description"}`;
       throw new Error("Voting has already ended");
     }
     throw new Error(`Cannot vote on proposal: status is ${proposal.status}`);
+  }
+
+  private async checkIfAlreadyVoted(
+    proposalId: string,
+    accountId: string,
+    votingContractId: string,
+    rpcUrl: string
+  ): Promise<boolean> {
+    const { recorded, verified } = await checkVoteRecordedOnChain(
+      proposalId,
+      accountId,
+      votingContractId,
+      rpcUrl
+    );
+    if (!verified) {
+      console.warn(
+        "⚠️ Could not verify existing vote status (proceeding with vote attempt)"
+      );
+      return false;
+    }
+    return recorded;
   }
 
   public async recordManualVote(
