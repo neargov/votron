@@ -96,7 +96,7 @@ export class Voter {
         aiDecision.reasons,
         aiDecision.selectedOption
       );
-      return await this.executeIfAutonomous(result, proposal);
+      return await this.executeVote(result, proposal);
     } catch (error: any) {
       console.error(`❌ AI evaluation failed for proposal ${id}:`, error);
       return this.saveResult(id, [`❌ AI evaluation error: ${error.message}`]);
@@ -182,7 +182,11 @@ Description: ${proposal.description || "No description"}`;
 
       const data = await response.json();
       const aiResponse = data.choices?.[0]?.message?.content || "";
-      return this.parseAIResponse(aiResponse);
+      const decision = this.parseAIResponse(aiResponse);
+
+      console.log(`✅ AI recommendation: ${decision.selectedOption}`);
+
+      return decision;
     } catch (error: any) {
       console.error("🤖 AI API call failed:", error);
       throw new Error(`AI evaluation failed: ${error.message}`);
@@ -246,7 +250,7 @@ Description: ${proposal.description || "No description"}`;
     }
   }
 
-  private async executeIfAutonomous(
+  private async executeVote(
     result: VoteDecision,
     proposal?: ProposalData
   ): Promise<VoteDecision> {
@@ -432,7 +436,7 @@ Description: ${proposal.description || "No description"}`;
     const id = proposalId.toString();
     const reasons = [reason || `Manual vote recorded: ${selectedOption}`];
     const result = this.saveResult(id, reasons, selectedOption);
-    return await this.executeIfAutonomous(result, proposal);
+    return await this.executeVote(result, proposal);
   }
 
   private trimExecutionResults() {

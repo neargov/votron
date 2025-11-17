@@ -104,16 +104,13 @@ app.post("/api/evaluate", async (c) => {
       );
     }
 
-    const decision = await voter.evaluateProposal(
-      body.proposalId,
-      canonicalProposal
-    );
+    const aiDecision = await voter.askAI(canonicalProposal);
 
     return c.json({
       proposalId: body.proposalId,
-      recommendation: decision.selectedOption,
-      reasons: decision.reasons,
-      timestamp: decision.timestamp,
+      recommendation: aiDecision.selectedOption,
+      reasons: aiDecision.reasons,
+      timestamp: new Date().toISOString(),
       verifiedFromChain: true,
       proposalTitle: canonicalProposal.title,
       proposalStatus: canonicalProposal.status,
